@@ -207,8 +207,8 @@ NODE_ID = re.compile(r"[A-Za-z0-9_฀-๿]+")
 SPACED_SHAPE = re.compile(r"(?<![A-Za-z0-9_฀-๿\]\)\}])[A-Za-z0-9_]+\s+[\[({]")
 AFTER_CLOSE = re.compile(r"(?:\s|$|[-;&:=.~<])")  # สิ่งที่ตามหลังโหนดได้ เช่น ช่องว่าง ลูกศร ; & :::class ~~~ <-->
 EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")  # ข้อความบนเส้น -->|...| ใช้กฎเดียวกับโหนด เว้นแต่ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ
-EDGE_TEXT = re.compile(r"(--|-\.|==)(?![>.=-]?>)[^|\n]*?(-{2,}>|-{3,}|--[ox]|={2,}>|={3,}|==[ox]|\.+->|\.-)")  # ข้อความบนเส้นแบบ A -- ข้อความ --> B ใช้หลังตัดโหนดออกแล้ว
-EDGE_TEXT_SAFE = re.compile(r"(--|-\.|==)(?![>.=-]?>)[^|\n\[\]\(\)\{\}]*?(-{2,}>|-{3,}|--[ox]|={2,}>|={3,}|==[ox]|\.+->|\.-)")  # แบบไม่ข้ามตัวปิดรูปทรง ใช้ก่อนหาโหนด เพื่อให้ > ในข้อความเส้นไม่ถูกอ่านเป็นรูปธง
+EDGE_TEXT = re.compile(r"(--|-\.|==)(?![>.=-]?>)(?![=-]+(?:\s|$))[^|\n]*?(-{2,}>|-{3,}|--[ox]|={2,}>|={3,}|==[ox]|\.+->|\.-)")  # ข้อความบนเส้นแบบ A -- ข้อความ --> B ใช้หลังตัดโหนดออกแล้ว
+EDGE_TEXT_SAFE = re.compile(r"(--|-\.|==)(?![>.=-]?>)(?![=-]+(?:\s|$))[^|\n\[\]\(\)\{\}]*?(-{2,}>|-{3,}|--[ox]|={2,}>|={3,}|==[ox]|\.+->|\.-)")  # แบบไม่ข้ามตัวปิดรูปทรง ใช้ก่อนหาโหนด เพื่อให้ > ในข้อความเส้นไม่ถูกอ่านเป็นรูปธง
 SHAPE_SPEC = re.compile(r"@\{[^}\n]*\}")  # A@{ shape: rect, label: ... } ข้อความใน label ใช้เครื่องหมายคำพูดเดี่ยวหรือไม่ครอบก็ได้
 # คำสงวนของ flowchart ที่ใช้เป็นรหัสโหนดไม่ได้ (แยกตัวพิมพ์ Class หรือ END ใช้ได้)
 RESERVED = re.compile(r"(?<![A-Za-z0-9_-])(?<![A-Za-z0-9_]-)(end|class|style|click|href|call|interpolate|linkStyle|classDef|subgraph|flowchart|graph)(?![A-Za-z0-9_])")  # end-user ก็ไม่ได้ แต่ x-end ได้
@@ -377,8 +377,9 @@ def check_mermaid_labels(d, start, code):
                 open_edge = False
             continue
         if in_quote >= 0:
-            if line.count('"') % 2 == 0:
+            if '"' not in line:
                 continue
+            reopen = line[line.index('"') + 1:].count('"') % 2 == 1  # ปิดแล้วเปิดข้อความใหม่ในบรรทัดเดียว
             in_quote = -1
             qi = line.index('"')
             if quote_kind == "node":
@@ -388,6 +389,14 @@ def check_mermaid_labels(d, start, code):
                 prefix = {"edge": 'Q -->|"Q', "text": 'Q -- "Q'}[quote_kind]
                 line = prefix + line[qi:]  # ตรวจเฉพาะส่วนหลังเครื่องหมายคำพูดปิดของข้อความหลายบรรทัด
             stripped = line.strip()
+            if reopen:
+                om = re.search(r"([\[({>|/\\]|--|-\.|==)\s*\"[^\"]*$", line)
+                if om:
+                    in_quote = k
+                    quote_kind = "edge" if om.group(1) == "|" else "text" if om.group(1) in ("--", "-.", "==") else "node"
+                else:
+                    warn(d.rel, start + 1 + k, "เครื่องหมายคำพูดในผัง Mermaid ไม่ครบคู่ ถ้าตั้งใจใช้สัญลักษณ์นิ้ว ให้ครอบข้อความทั้งหมดและเขียนเป็น #quot;")
+                continue
         if not stripped or stripped.startswith("%%") or stripped.lower().startswith(("acctitle", "accdescr")):
             continue
         if line.count('"') % 2 == 1:
@@ -402,10 +411,14 @@ def check_mermaid_labels(d, start, code):
         if "%%" in mask_quotes(line):
             warn(d.rel, start + 1 + k, "คอมเมนต์ %% ของผัง Mermaid ต้องอยู่บรรทัดของตัวเอง เมื่อต่อท้ายบรรทัดอื่น Mermaid 11 มักวาดไม่ได้ ให้ย้ายไปบรรทัดใหม่")
             continue
-        if re.match(r"^linkStyle\s", stripped) and re.search(r"#[0-9A-Fa-f]{3,8}\s*;\s*$", stripped):
-            warn(d.rel, start + 1 + k, f"บรรทัด linkStyle ที่ลงท้ายด้วยสีฐานสิบหกแล้วตามด้วย ; Mermaid 11 วาดไม่ได้ ให้ตัด ; ออก: {stripped[:40]}")
-            continue
-        if re.search(r"[\])}]\s+:::", stripped) or (re.match(r"^subgraph\s", stripped) and ":::" in stripped):
+        if re.match(r"^(?:linkStyle|style|classDef)\s", stripped):
+            if re.search(r"#[0-9A-Fa-f]{3,8};\s*$", stripped) or re.search(r";\s*\S", stripped):
+                warn(d.rel, start + 1 + k, f"บรรทัด style classDef linkStyle คั่นค่าด้วยจุลภาค ไม่ใช่ ; และห้ามมี ; ติดท้ายสีฐานสิบหก: {stripped[:40]}")
+                continue
+            if re.search(r"\b(?:rgb|rgba|hsl)\(", stripped):
+                warn(d.rel, start + 1 + k, f"สีในผัง Mermaid ใช้รูป #hex หรือชื่อสี ไม่ใช้ rgb() หรือ hsl(): {stripped[:40]}")
+                continue
+        if re.search(r"(?:[\])}]|[A-Za-z0-9_])\s+:::", stripped) or re.search(r":::\s", stripped) or (re.match(r"^subgraph\s", stripped) and ":::" in stripped):
             warn(d.rel, start + 1 + k, f":::ชื่อclass ต้องติดกับตัวปิดรูปทรงโดยไม่มีช่องว่าง และใช้กับ subgraph ไม่ได้: {stripped[:40]}")
             continue
         if re.match(r"^click\s", stripped):
@@ -481,6 +494,10 @@ def check_mermaid_labels(d, start, code):
                 warn(d.rel, start + 1 + k, "ข้อความโหนดในผัง Mermaid เป็นเครื่องหมายคำพูดว่าง Mermaid ไม่รับ ให้ใส่ข้อความ")
                 warned = True
                 break
+            if opener in ("(", "((") and t[:1] == "-":
+                warn(d.rel, start + 1 + k, f"ข้อความในวงเล็บกลมที่ขึ้นต้นด้วย - ต้องครอบด้วยเครื่องหมายคำพูด เพราะ Mermaid อ่าน (- เป็นรูปทรง: {t[:40]}")
+                warned = True
+                break
             if opener == "[" and raw_first in ("/", "\\"):
                 warn(d.rel, start + 1 + k, f"ข้อความโหนดที่ขึ้นต้นด้วย / หรือ \\ ต้องครอบด้วยเครื่องหมายคำพูด เพราะ Mermaid อ่านเป็นรูปทรง เช่น A[\"/api/v1\"]: {t[:40]}")
                 warned = True
@@ -504,6 +521,10 @@ def check_mermaid_labels(d, start, code):
                 continue  # ครอบเครื่องหมายคำพูดทั้งข้อความแล้ว
             breakers = LABEL_BREAKERS.search(t)
             if breakers and opener in ("[/", "[\\") and breakers.group(0) == '"':
+                if re.search(r"[()\[\]{}]", t.replace('"Q"', "")):
+                    warn(d.rel, start + 1 + k, f"สี่เหลี่ยมคางหมูที่ครอบเครื่องหมายคำพูดไม่ครบทั้งข้อความ ส่วนที่เหลือมีวงเล็บไม่ได้ ให้ครอบทั้งข้อความ: {t[:40]}")
+                    warned = True
+                    break
                 continue  # สี่เหลี่ยมคางหมูรับเครื่องหมายคำพูดภายในได้
             if breakers:
                 warn(d.rel, start + 1 + k, f"ข้อความในผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ (เครื่องหมายคำพูดภายในใช้ #quot;): {t[:40]}")
@@ -702,7 +723,7 @@ def check_section_refs(root, docs):
     flow_where = {}
     for d in flows:
         for line_no, _, text in d.headings:
-            for n in re.findall(r"^Flow\s+(\d+)(?!\d)", text):
+            for n in re.findall(r"^Flow(?:\s*ที่)?\s+(\d+)(?!\d)", text):
                 if n in flow_where:
                     err(d.rel, line_no, f"หัวข้อ Flow {n} ซ้ำกับ {flow_where[n]} เลข Flow ต้องไม่ซ้ำกันแม้แยกหลายไฟล์")
                 flow_where.setdefault(n, f"{d.rel}:{line_no}")
@@ -922,7 +943,7 @@ def actual_counts(docs):
     all_flows = {}
     for d in docs:
         if is_flows(d):
-            flows = {n for _, _, t in d.headings for n in re.findall(r"^Flow\s+(\d+)(?!\d)", t)}
+            flows = {n for _, _, t in d.headings for n in re.findall(r"^Flow(?:\s*ที่)?\s+(\d+)(?!\d)", t)}
             if flows:
                 out.append(f"{d.rel}: Flow {len(flows)} เรื่อง")
                 all_flows[d.rel] = flows
