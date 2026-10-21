@@ -70,6 +70,9 @@ def main():
     problems = []
     report = []
     for n, e in enumerate(edits, 1):
+        if not isinstance(e, dict):
+            problems.append(f"รายการที่ {n}: ต้องเป็น object ที่มี file, find และ replace")
+            continue
         find = e.get("find", "")
         repl = e.get("replace")
         target = e.get("file", "")
@@ -80,6 +83,9 @@ def main():
             paths = all_docs(root)
         else:
             p = (root / target).resolve()
+            if root not in p.parents:
+                problems.append(f"รายการที่ {n}: ไฟล์ {target} อยู่นอกโฟลเดอร์โครงการ")
+                continue
             if not p.is_file():
                 problems.append(f"รายการที่ {n}: ไม่พบไฟล์ {target}")
                 continue
@@ -88,6 +94,9 @@ def main():
         total = sum(hits.values())
         expected = e.get("count")
         label = find if len(find) <= 40 else find[:37] + "..."
+        if expected is not None and (not isinstance(expected, int) or expected < 1):
+            problems.append(f"รายการที่ {n}: count ต้องเป็นจำนวนเต็มตั้งแต่ 1 ({target})")
+            continue
         if expected is None:
             ok = total >= 1 if target == "*" else total == 1
             want = "อย่างน้อย 1" if target == "*" else "1"

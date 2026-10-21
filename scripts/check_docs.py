@@ -7,6 +7,8 @@
 --render  ลองวาดผัง Mermaid ทุกผังด้วย Chrome หรือ Edge ในเครื่อง (ต้องมีอินเทอร์เน็ต)
 
 สคริปต์รู้จักไฟล์จากคำในชื่อไฟล์: flows, decisions, screens, api, data-model ชุดเอกสารต้องใช้ชื่อเหล่านี้
+คำที่สคริปต์ใช้ตรวจมีทั้งไทยและอังกฤษ: ข้อ/section, Flow, ประเด็นที่/Decision, (รอยืนยัน)/(to be confirmed),
+(ลูกค้ากำหนด)/(client-specified), **สถานะ:**/**Status:** เอกสารภาษาอื่นให้ใช้คำอังกฤษเหล่านี้
 
 รหัสออก: 0 = ไม่มีรายการระดับผิดพลาด, 1 = มีรายการระดับผิดพลาด, 2 = เรียกใช้ผิด
 """
@@ -156,7 +158,8 @@ def check_numbering(root):
 
 
 # ข้อความใน [] () {} ของ flowchart ที่มีวงเล็บ ทับ หรือโคลอน แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูด จะทำให้ผังวาดไม่ได้
-LABEL = re.compile(r"[A-Za-z0-9_\u0E00-\u0E7F]+\s*(\[\[?|\(\(?|\{\{?|>)\s*(\"[^\"\n]*\"|[^\]\)\}\n\"]*?)\s*(\]\]?|\)\)?|\}\}?)")
+LABEL = re.compile(r"[A-Za-z0-9_\u0E00-\u0E7F]+\s*(\[\(|\[/|\[\\|\[\[|\(\(|\{\{|\[|\(|\{|>)\s*"
+                   r"(\"[^\"\n]*\"|[^\]\)\}\n\"]*?)\s*(\)\]|/\]|\\\]|\]\]|\)\)|\}\}|\]|\)|\})")
 EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")
 
 
@@ -167,7 +170,7 @@ def check_mermaid_labels(d, start, code):
     for k, line in enumerate(code.splitlines()):
         texts = [m.group(2) for m in LABEL.finditer(line)] + [m.group(1) for m in EDGE_LABEL.finditer(line)]
         for t in texts:
-            t = t.strip()
+            t = re.sub(r"<br\s*/?>", " ", t).strip()  # <br/> คือการขึ้นบรรทัดใหม่ของ Mermaid ใช้ได้โดยไม่ต้องครอบ
             if not t or (t.startswith('"') and t.endswith('"')):
                 continue
             if re.search(r"[()/:]", t):
@@ -192,7 +195,8 @@ def check_fences(docs):
                 check_mermaid_labels(d, start, code)
 
 
-FILE_TOKEN = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.md)(?![\w-])")
+# ใช้เฉพาะอักษรละติน เพื่อไม่ให้คำไทยที่ติดกับชื่อไฟล์ถูกกลืนเข้าไปในชื่อไฟล์
+FILE_TOKEN = re.compile(r"(?<![A-Za-z0-9_/.-])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.md)(?![A-Za-z0-9_-])")
 MD_LINK = re.compile(r"\]\(([^)\s]+)\)")
 
 
@@ -235,7 +239,9 @@ def check_file_refs(root, docs):
                     err(d.rel, i, f"ลิงก์ชี้ไปยังไฟล์ที่ไม่มีอยู่: {target}")
 
 
-SECTION_REF = re.compile(r"((?:[\w.-]+/)*\d\d-[a-z0-9-]+\.md)`?\s+(?:ข้อ|หัวข้อ|หัวข้อที่|section|Section)\s+")
+SECTION_REF = re.compile(r"((?:[A-Za-z0-9_.-]+/)*\d\d-[a-z0-9-]+\.md)`?\s+(?:ข้อ|หัวข้อ|หัวข้อที่|section|Section)\s+")
+DECISION_REF = re.compile(r"(?:ประเด็นที่|(?<![A-Za-z0-9_])Decision)\s+(?=\d)")
+FLOW_WORD = r"(?<![A-Za-z0-9_])Flow"
 # เลขที่ตามด้วยขีดและตัวอักษร เช่น 03-flows.md เป็นชื่อไฟล์ ไม่ใช่เลขข้อ
 NUMBER = re.compile(r"(\d+(?:\.\d+)*)(?![\d.]*-[A-Za-z])")
 SEP = re.compile(r"\s*(,|และ|and)\s*")
@@ -299,7 +305,7 @@ def check_section_refs(root, docs):
     flow_where = {}
     for d in flows:
         for line_no, _, text in d.headings:
-            for n in re.findall(r"^Flow\s+(\d+)\b", text):
+            for n in re.findall(r"^Flow\s+(\d+)(?!\d)", text):
                 if n in flow_where:
                     err(d.rel, line_no, f"หัวข้อ Flow {n} ซ้ำกับ {flow_where[n]} เลข Flow ต้องไม่ซ้ำกันแม้แยกหลายไฟล์")
                 flow_where.setdefault(n, f"{d.rel}:{line_no}")
@@ -313,23 +319,25 @@ def check_section_refs(root, docs):
         err("docs/", 0, "ไม่พบไฟล์ประเด็นตัดสินใจ (ชื่อไฟล์ต้องมีคำว่า decisions) จึงตรวจการอ้างประเด็นไม่ได้")
 
     for d in docs:
+        if is_source_doc(d):
+            continue  # บันทึกข้อความของลูกค้าตามเดิม เลข Flow หรือประเด็นในนั้นเป็นของลูกค้า
         for i, line in d.prose_lines():
             for m in SECTION_REF.finditer(line):
                 target = by_name.get(Path(m.group(1)).name)
                 if not target:
                     continue  # ไฟล์ไม่มีอยู่ ถูกรายงานแล้วในการตรวจไฟล์
                 have = target.referable_numbers()
-                for n in parse_numbers(line[m.end():m.end() + 60]):
+                for n in parse_numbers(line[m.end():]):
                     if n not in have:
                         err(d.rel, i, f"อ้างถึง {target.path.name} ข้อ {n} แต่ไฟล์นั้นไม่มีหัวข้อเลข {n}")
             if flows:
-                for m in re.finditer(r"\bFlow\s+(?=\d)", line):
-                    for n in parse_numbers(line[m.end():m.end() + 60]):
+                for m in re.finditer(FLOW_WORD + r"\s+(?=\d)", line):
+                    for n in parse_numbers(line[m.end():]):
                         if n not in flow_nums:
                             err(d.rel, i, f"อ้างถึง Flow {n} แต่ไฟล์ลำดับการทำงานไม่มีหัวข้อ Flow {n}")
             if decisions:
-                for m in re.finditer(r"ประเด็นที่\s+(?=\d)", line):
-                    for n in parse_numbers(line[m.end():m.end() + 60]):
+                for m in DECISION_REF.finditer(line):
+                    for n in parse_numbers(line[m.end():]):
                         if n not in decision_nums:
                             err(d.rel, i, f"อ้างถึงประเด็นที่ {n} แต่ไฟล์ประเด็นตัดสินใจไม่มีหัวข้อเลข {n}")
 
@@ -365,7 +373,8 @@ def check_invented_codes(docs):
 
 
 LEFTOVER = re.compile(r"\b(TODO|TBD|FIXME|Lorem ipsum)\b")
-PLACEHOLDER = re.compile(r"<([^<>\n/][^<>\n]{1,60})>")
+# ไม่นับ List<TYPE> (มีอักษรละตินติดหน้า <) และเครื่องหมายเปรียบเทียบ เช่น "< 1000 บาท และ >" (หลัง < เป็นช่องว่าง)
+PLACEHOLDER = re.compile(r"(?<![A-Za-z0-9_])<([^<>\n/\s][^<>\n]{0,60})>")
 HTML_TAGS = {"br", "b", "i", "u", "em", "strong", "sub", "sup", "kbd", "span", "div", "p", "a", "img",
              "details", "summary", "table", "tr", "td", "th", "thead", "tbody", "ul", "ol", "li", "hr", "code", "pre"}
 
@@ -378,7 +387,8 @@ def check_leftovers(docs):
             if m:
                 warn(d.rel, i, f"พบข้อความค้าง: {m.group(1)}")
             for p in PLACEHOLDER.finditer(clean):
-                name = p.group(1).strip().split()[0].lower().rstrip("/")
+                parts = p.group(1).split()
+                name = parts[0].lower().rstrip("/") if parts else ""
                 if name in HTML_TAGS:
                     continue
                 warn(d.rel, i, f"พบช่องที่อาจยังไม่ได้แทนค่า: <{p.group(1)}>")
@@ -400,20 +410,22 @@ def check_empty_sections(docs):
 
 
 # (รอยืนยัน) หรือ (จำนวนรูปรอยืนยัน) ไม่รวมชื่อสถานะเช่น รอยืนยันผล และโหมดกลับด้าน (ลูกค้ากำหนด)
-PENDING_MARK = re.compile(r"\([^()\n]*รอยืนยัน\)|\(ลูกค้ากำหนด\)")
+PENDING_MARK = re.compile(r"\([^()\n]*(?:รอยืนยัน|to be confirmed)\)|\((?:ลูกค้ากำหนด|client-specified)\)")
+CLIENT_MARK = re.compile(r"\((?:ลูกค้ากำหนด|client-specified)\)")
 
 
 def check_pending_marks(docs):
     decisions = [d for d in docs if "decision" in d.path.name.lower()]
     marked = [d for d in docs if PENDING_MARK.search(d.text) and d.rel != "README.md" and d not in decisions]
+    for d in marked:
+        if CLIENT_MARK.search(d.text) and PENDING_MARK.search(CLIENT_MARK.sub("", d.text)):
+            warn(d.rel, 0, "ไฟล์นี้ใช้ทั้ง (รอยืนยัน) และ (ลูกค้ากำหนด) ให้เลือกแบบเดียวต่อไฟล์")
     if marked and not decisions:
         return  # รายงานไว้แล้วว่าไม่พบไฟล์ประเด็นตัดสินใจ
     names = [d.path.name for d in decisions]
     for d in marked:
-        if not any(n in d.text for n in names) and "ประเด็นที่" not in d.text:
+        if not any(n in d.text for n in names) and not DECISION_REF.search(d.text):
             warn(d.rel, 0, "ไฟล์นี้มีเครื่องหมาย (รอยืนยัน) หรือ (ลูกค้ากำหนด) แต่ไม่ได้ชี้ไปที่ไฟล์ประเด็นตัดสินใจหรือเลขประเด็น ผู้อ่านจะหารายละเอียดไม่เจอ")
-        if "(ลูกค้ากำหนด)" in d.text and PENDING_MARK.search(d.text.replace("(ลูกค้ากำหนด)", "")):
-            warn(d.rel, 0, "ไฟล์นี้ใช้ทั้ง (รอยืนยัน) และ (ลูกค้ากำหนด) ให้เลือกแบบเดียวต่อไฟล์")
 
 
 ROW = re.compile(r"^\s*\|(.+)\|\s*$")
@@ -444,6 +456,7 @@ def check_decision_summary(docs):
         first_numbered = min(l for l, _, t in d.headings if NUM_TOKEN.match(t))
         summary_nums = {r[0] for r in table_rows(d, 0, first_numbered - 1) if r and r[0].isdigit()}
         if not summary_nums:
+            err(d.rel, 0, "ไม่พบตารางสรุปประเด็น (ตารางที่คอลัมน์แรกเป็นเลขประเด็น) ก่อนหัวข้อประเด็นแรก")
             continue
         for n in sorted(heading_nums - summary_nums, key=int):
             err(d.rel, 0, f"ประเด็นที่ {n} มีหัวข้อ แต่ไม่อยู่ในตารางสรุปประเด็น")
@@ -464,7 +477,7 @@ def actual_counts(docs):
             nums = [n for n in d.heading_numbers() if n.isdigit()]
             statuses = {}
             for line in d.lines:
-                m = re.match(r"^\*\*สถานะ:\*\*\s*(.+?)(?:\s*\(|$)", line.strip())
+                m = re.match(r"^\*\*(?:สถานะ|Status):\*\*\s*(.+?)(?:\s*\(|$)", line.strip())
                 if m:
                     key = m.group(1).strip()
                     statuses[key] = statuses.get(key, 0) + 1
