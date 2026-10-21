@@ -111,6 +111,19 @@ class Doc:
         return nums
 
 
+def name_has(path, *words):
+    """ชื่อไฟล์มีคำนี้เป็นชิ้นที่คั่นด้วยขีดหรือไม่ เช่น 03-flows-booking.md มี flows แต่ workflow.md ไม่มี"""
+    parts = re.split(r"[-_.]", path.name.lower())
+    return any(w in parts for w in words)
+
+
+def is_flows(d): return name_has(d.path, "flows", "flow")
+def is_decisions(d): return name_has(d.path, "decisions", "decision")
+def is_screens(d): return name_has(d.path, "screens", "screen")
+def is_api(d): return name_has(d.path, "api")
+def is_data_model(d): return "data-model" in d.path.name.lower() or "data_model" in d.path.name.lower()
+
+
 def strip_inline_code(line):
     return re.sub(r"`[^`]*`", " ", line)
 
@@ -218,7 +231,8 @@ def check_file_refs(root, docs):
     for d in docs:
         if is_source_doc(d):
             for m in FILE_TOKEN.finditer(d.text):
-                source_names.add(Path(m.group(1)).name)
+                if not re.match(r"^\d\d-[a-z0-9-]+\.md$", Path(m.group(1)).name):
+                    source_names.add(Path(m.group(1)).name)
     for d in docs:
         if is_source_doc(d):
             continue
@@ -299,8 +313,8 @@ def check_section_refs(root, docs):
     by_name = {}
     for d in docs:
         by_name.setdefault(d.path.name, d)
-    flows = [d for d in docs if "flow" in d.path.name.lower()]
-    decisions = [d for d in docs if "decision" in d.path.name.lower()]
+    flows = [d for d in docs if is_flows(d)]
+    decisions = [d for d in docs if is_decisions(d)]
     flow_nums = set()
     flow_where = {}
     for d in flows:
@@ -353,6 +367,15 @@ def check_readme_lists_files(root, docs):
         for p in sorted(folder.glob("*.md")):
             if p.name not in readme.text:
                 err("README.md", 0, f"README ไม่ได้กล่าวถึงไฟล์ {sub}/{p.name}")
+    # ชื่อไฟล์ที่ README กล่าวถึง รวมในแผนผังต้นไม้ที่อยู่ในบล็อกโค้ด ต้องมีจริง
+    source_names = {Path(m.group(1)).name for d in docs if is_source_doc(d) for m in FILE_TOKEN.finditer(d.text)}
+    for i, line in enumerate(readme.lines, 1):
+        for m in FILE_TOKEN.finditer(line):
+            tok = m.group(1)
+            if any(c in tok for c in "<>*{}") or Path(tok).name in source_names:
+                continue
+            if not resolve(root, readme, tok):
+                err("README.md", i, f"README กล่าวถึงไฟล์ที่ไม่มีอยู่: {tok}")
 
 
 CODE = re.compile(r"(?<![\w-])([A-Z]{1,4}(?:-[A-Z]{1,3})?)-([A-Z]?\d{1,4})(?![\w-])")
@@ -374,7 +397,7 @@ def check_invented_codes(docs):
 
 LEFTOVER = re.compile(r"\b(TODO|TBD|FIXME|Lorem ipsum)\b")
 # ไม่นับ List<TYPE> (มีอักษรละตินติดหน้า <) และเครื่องหมายเปรียบเทียบ เช่น "< 1000 บาท และ >" (หลัง < เป็นช่องว่าง)
-PLACEHOLDER = re.compile(r"(?<![A-Za-z0-9_])<([^<>\n/\s][^<>\n]{0,60})>")
+PLACEHOLDER = re.compile(r"(?<![A-Za-z0-9_])<([A-Za-z\u0E00-\u0E7F][^<>\n@]{0,60})>")
 HTML_TAGS = {"br", "b", "i", "u", "em", "strong", "sub", "sup", "kbd", "span", "div", "p", "a", "img",
              "details", "summary", "table", "tr", "td", "th", "thead", "tbody", "ul", "ol", "li", "hr", "code", "pre"}
 
@@ -410,12 +433,12 @@ def check_empty_sections(docs):
 
 
 # (รอยืนยัน) หรือ (จำนวนรูปรอยืนยัน) ไม่รวมชื่อสถานะเช่น รอยืนยันผล และโหมดกลับด้าน (ลูกค้ากำหนด)
-PENDING_MARK = re.compile(r"\([^()\n]*(?:รอยืนยัน|to be confirmed)\)|\((?:ลูกค้ากำหนด|client-specified)\)")
-CLIENT_MARK = re.compile(r"\((?:ลูกค้ากำหนด|client-specified)\)")
+PENDING_MARK = re.compile(r"\([^()\n]*(?:รอยืนยัน|to be confirmed)\)|\((?:ลูกค้ากำหนด|client-specified)\)", re.IGNORECASE)
+CLIENT_MARK = re.compile(r"\((?:ลูกค้ากำหนด|client-specified)\)", re.IGNORECASE)
 
 
 def check_pending_marks(docs):
-    decisions = [d for d in docs if "decision" in d.path.name.lower()]
+    decisions = [d for d in docs if is_decisions(d)]
     marked = [d for d in docs if PENDING_MARK.search(d.text) and d.rel != "README.md" and d not in decisions]
     for d in marked:
         if CLIENT_MARK.search(d.text) and PENDING_MARK.search(CLIENT_MARK.sub("", d.text)):
@@ -448,7 +471,7 @@ def table_rows(doc, start, end):
 def check_decision_summary(docs):
     """ตารางสรุปประเด็นต้องมีเลขตรงกับหัวข้อประเด็นจริง"""
     for d in docs:
-        if "decision" not in d.path.name.lower():
+        if not is_decisions(d):
             continue
         heading_nums = {n for n in d.heading_numbers() if n.isdigit()}
         if not heading_nums:
@@ -462,18 +485,26 @@ def check_decision_summary(docs):
             err(d.rel, 0, f"ประเด็นที่ {n} มีหัวข้อ แต่ไม่อยู่ในตารางสรุปประเด็น")
         for n in sorted(summary_nums - heading_nums, key=int):
             err(d.rel, 0, f"ตารางสรุปประเด็นมีประเด็นที่ {n} แต่ไม่มีหัวข้อของประเด็นนั้น")
+        # บรรทัด "ประเด็นที่ต้องปิดก่อน...: 1, 9" เลขต้องมีหัวข้อจริง
+        for i, line in d.prose_lines():
+            m = re.match(r"^\*\*[^*\n]*(?:ประเด็นที่ต้องปิด|Decisions to close)[^*\n]*:\*\*\s*(.*)$", line.strip())
+            if m:
+                for n in parse_numbers(m.group(1)):
+                    if n not in heading_nums:
+                        err(d.rel, i, f"บรรทัดประเด็นที่ต้องปิดอ้างประเด็นที่ {n} แต่ไม่มีหัวข้อของประเด็นนั้น")
 
 
 def actual_counts(docs):
     """นับของจริงให้ผู้เขียนเทียบกับตัวเลขที่สรุปไว้ในเอกสาร"""
     out = []
+    all_flows = {}
     for d in docs:
-        name = d.path.name.lower()
-        if "flow" in name:
-            flows = {n for _, _, t in d.headings for n in re.findall(r"\bFlow\s+(\d+)", t)}
+        if is_flows(d):
+            flows = {n for _, _, t in d.headings for n in re.findall(r"^Flow\s+(\d+)(?!\d)", t)}
             if flows:
                 out.append(f"{d.rel}: Flow {len(flows)} เรื่อง")
-        if "decision" in name:
+                all_flows[d.rel] = flows
+        if is_decisions(d):
             nums = [n for n in d.heading_numbers() if n.isdigit()]
             statuses = {}
             for line in d.lines:
@@ -484,7 +515,7 @@ def actual_counts(docs):
             if nums:
                 detail = ", ".join(f"{k} {v}" for k, v in sorted(statuses.items()))
                 out.append(f"{d.rel}: ประเด็น {len(nums)} เรื่อง" + (f" ({detail})" if detail else ""))
-        if "screen" in name:
+        if is_screens(d):
             hs = d.headings
             total = 0
             parts = []
@@ -496,14 +527,16 @@ def actual_counts(docs):
                     total += len(rows)
             if total:
                 out.append(f"{d.rel}: แถวที่มีเลขลำดับ {total} แถว ({'; '.join(parts)})")
-        if "api" in name:
+        if is_api(d):
             methods = sum(1 for line in d.lines if re.match(r"^\s*\|\s*(GET|POST|PUT|PATCH|DELETE)\b", line))
             if methods:
                 out.append(f"{d.rel}: แถว API {methods} แถว")
-        if "data-model" in name or "data_model" in name:
-            entities = [t for _, level, t in d.headings if level == 3 and re.match(r"^[A-Z][A-Z0-9_]+\b", t)]
+        if is_data_model(d):
+            entities = [t for _, level, t in d.headings if level == 3 and re.match(r"^[A-Za-z][A-Za-z0-9_]*(?=\s|$)", t)]
             if entities:
                 out.append(f"{d.rel}: Entity {len(entities)} รายการ")
+    if len(all_flows) > 1:
+        out.append(f"รวมทุกไฟล์ลำดับการทำงาน: Flow {sum(len(v) for v in all_flows.values())} เรื่อง")
     return out
 
 

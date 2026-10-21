@@ -64,7 +64,8 @@ def main():
 
     def load(p):
         if p not in content:
-            content[p] = p.read_text(encoding="utf-8")
+            with open(p, encoding="utf-8", newline="") as f:  # คงรูปแบบขึ้นบรรทัดเดิมของไฟล์
+                content[p] = f.read()
         return content[p]
 
     problems = []
@@ -94,7 +95,7 @@ def main():
         total = sum(hits.values())
         expected = e.get("count")
         label = find if len(find) <= 40 else find[:37] + "..."
-        if expected is not None and (not isinstance(expected, int) or expected < 1):
+        if expected is not None and (type(expected) is not int or expected < 1):
             problems.append(f"รายการที่ {n}: count ต้องเป็นจำนวนเต็มตั้งแต่ 1 ({target})")
             continue
         if expected is None:
@@ -124,8 +125,11 @@ def main():
         return 0
     changed = 0
     for p, text in content.items():
-        if text != p.read_text(encoding="utf-8"):
-            p.write_text(text, encoding="utf-8", newline="\n")
+        with open(p, encoding="utf-8", newline="") as f:
+            original = f.read()
+        if text != original:
+            with open(p, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
             changed += 1
     print(f"\nเขียนไฟล์แล้ว {changed} ไฟล์ จาก {len(edits)} รายการแก้")
     return 0
