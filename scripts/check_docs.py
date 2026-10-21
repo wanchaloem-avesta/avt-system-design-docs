@@ -206,6 +206,7 @@ SPACED_SHAPE = re.compile(r"(?<![A-Za-z0-9_฀-๿\]\)\}])[A-Za-z0-9_]+\s+[\[({]
 AFTER_CLOSE = re.compile(r"(?:\s|$|[-;&:=.~<])")  # สิ่งที่ตามหลังโหนดได้ เช่น ช่องว่าง ลูกศร ; & :::class ~~~ <-->
 EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")  # ข้อความบนเส้น -->|...| ใช้กฎเดียวกับโหนด เว้นแต่ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ
 EDGE_TEXT = re.compile(r"(--|-\.|==)(?![>.=-]?>)[^|\n]*?(-{2,}>|-{3,}|--[ox]|={2,}>|={3,}|==[ox]|\.+->|\.-)")  # ข้อความบนเส้นแบบ A -- ข้อความ --> B ใช้หลังตัดโหนดออกแล้ว
+EDGE_TEXT_SAFE = re.compile(r"(--|-\.|==)(?![>.=-]?>)[^|\n\[\]\(\)\{\}]*?(-{2,}>|-{3,}|--[ox]|={2,}>|={3,}|==[ox]|\.+->|\.-)")  # แบบไม่ข้ามตัวปิดรูปทรง ใช้ก่อนหาโหนด เพื่อให้ > ในข้อความเส้นไม่ถูกอ่านเป็นรูปธง
 SHAPE_SPEC = re.compile(r"@\{[^}\n]*\}")  # A@{ shape: rect, label: ... } ข้อความใน label ใช้เครื่องหมายคำพูดเดี่ยวหรือไม่ครอบก็ได้
 # คำสงวนของ flowchart ที่ใช้เป็นรหัสโหนดไม่ได้ (แยกตัวพิมพ์ Class หรือ END ใช้ได้)
 RESERVED = re.compile(r"(?<![A-Za-z0-9_-])(?<![A-Za-z0-9_]-)(end|class|style|click|href|call|interpolate|linkStyle|classDef|subgraph|flowchart|graph)(?![A-Za-z0-9_])")  # end-user ก็ไม่ได้ แต่ x-end ได้
@@ -213,10 +214,11 @@ RESERVED = re.compile(r"(?<![A-Za-z0-9_-])(?<![A-Za-z0-9_]-)(end|class|style|cli
 LEADING_COMMAND = re.compile(r"^\s*(?:(?:class|style|click|linkStyle|classDef|subgraph|direction)(?=\s)(?!\s*(?:-->|---|-\.|==|--[ox]|<-|[\[({>]|&|:::|~~~))|end\s*;?\s*$)")
 RESERVED_DASH_OK = {"call", "href", "click"}  # call-center, href-x ใช้ได้ และ call[x] href[x] ก็ได้
 ER_ENTITY = r"[A-Za-z0-9_-]+"
-ER_REL_LINE = re.compile(r"^\s*(\S+)\s+[|}o{]+(?:--|\.\.)[|}o{]+\s+(\S+)(?:\s*:\s*(.*?)|\s+(\S.*?))?\s*$")  # USER ||--o{ ORDER : label (group 4 คือข้อความที่ลืม :)
+ER_REL_LINE = re.compile(r"^\s*(\S+)\s+[|}o{]+(?:--|\.\.)[|}o{]+\s+([^\s:]+)(?:\s*:\s*(.*?)|\s+(\S.*?))?\s*$")  # USER ||--o{ ORDER : label (group 4 คือข้อความที่ลืม :)
 # ป้ายที่ไม่ครอบเครื่องหมายคำพูดต้องเป็นคำเดียว ขึ้นต้นด้วยตัวอักษร มีได้แค่ตัวอักษร ตัวเลข _ - . และไม่ใช่คำสงวน one many to (ยืนยันกับ mermaid@11)
 ER_PLAIN = re.compile(r"^[A-Za-z_฀-๿][A-Za-z0-9_.\-฀-๿]*$")
-ER_RESERVED = {"one", "many", "to"}
+ER_RESERVED = {"one", "many", "to", "class", "classdef", "style", "end", "erdiagram"}  # เทียบแบบไม่แยกตัวพิมพ์ ใช้ทั้งป้ายที่ไม่ครอบและชื่อ Entity
+ER_DEF_LINE = re.compile(r"^\s*(\S+)\s*\{\s*$")
 
 
 def mask_quotes(line):
@@ -278,6 +280,17 @@ def node_labels(line):
                         found, found_closer = k, closer
                     break
                 search = k + 1
+        if found < 0 and opener in ("[/", "[\\"):
+            # ไม่ใช่สี่เหลี่ยมคางหมู แต่เป็นข้อความที่ขึ้นต้นด้วย / หรือ \ ในกรอบสี่เหลี่ยม เช่น [/api/v1] ซึ่ง Mermaid ไม่รับ
+            search = body_start
+            while True:
+                k = line.find("]", search)
+                if k < 0:
+                    break
+                if AFTER_CLOSE.match(line, k + 1):
+                    found, found_closer, opener, body_start = k, "]", "[", body_start - 1
+                    break
+                search = k + 1
         if found < 0:
             pos = body_start
             continue
@@ -291,8 +304,16 @@ def check_er_labels(d, start, body):
         stripped = line.strip()
         if not stripped or stripped.startswith("%%") or stripped.startswith("erDiagram"):
             continue
+        dm = ER_DEF_LINE.match(mask_quotes(line))
+        if dm and dm.group(1).lower() in ER_RESERVED:
+            warn(d.rel, start + 1 + k, f"ชื่อ Entity {dm.group(1)} เป็นคำสงวนของ Mermaid ใช้ไม่ได้ ให้เปลี่ยนชื่อ เช่น {dm.group(1)}ROOM หรือเพิ่มคำขยาย: {stripped[:40]}")
+            continue
         m = ER_REL_LINE.match(mask_quotes(line))  # ปิดบังข้อความในเครื่องหมายคำพูดก่อน เพื่อให้ชื่อแสดงที่มีช่องว่างไม่ทำให้บรรทัดไม่ตรงรูป
         if not m:
+            continue
+        if m.group(1).lower() in ER_RESERVED or m.group(2).lower() in ER_RESERVED:
+            bad = m.group(1) if m.group(1).lower() in ER_RESERVED else m.group(2)
+            warn(d.rel, start + 1 + k, f"ชื่อ Entity {bad} เป็นคำสงวนของ Mermaid ใช้ไม่ได้ ให้เปลี่ยนชื่อ: {stripped[:40]}")
             continue
         left, right, label, extra = m.group(1), m.group(2), m.group(3), m.group(4)
         if extra:
@@ -331,7 +352,7 @@ def check_mermaid_labels(d, start, code):
             continue  # บรรทัดประกาศชนิดผัง
         if re.match(r"^subgraph(?![A-Za-z0-9_])", stripped):
             depth += 1
-        elif re.match(r"^end\s*;?\s*$", stripped):
+        elif re.match(r"^end\s*;?\s*(%%.*)?$", stripped):
             if depth == 0:
                 warn(d.rel, start + 1 + k, "พบ end โดยไม่มี subgraph ที่เปิดอยู่")
             depth = max(0, depth - 1)
@@ -373,12 +394,34 @@ def check_mermaid_labels(d, start, code):
         if warned:
             continue
         masked = EDGE_LABEL.sub("||", masked)
+
+        def edge_text_issues(text, rx):
+            for m in rx.finditer(text):
+                inner = text[m.start() + len(m.group(1)):m.end() - len(m.group(2))].strip()
+                if inner == '"Q"' or not inner:
+                    continue
+                if '"' in inner:
+                    return f"ข้อความบนเส้นแบบ -- ข้อความ --> มีเครื่องหมายคำพูดแต่ไม่ได้ครอบทั้งข้อความ ให้เขียน -- \"ข้อความ\" -->: {inner[:40]}"
+                if (m.group(1) == "-." and "." in inner) or (m.group(1) == "==" and "=" in inner):
+                    return f"ข้อความบนเส้นประหรือเส้นหนาแบบ -. ข้อความ .-> หรือ == ข้อความ ==> มีจุดหรือเครื่องหมายเท่ากับ ซึ่ง Mermaid อ่านเป็นตัวเส้น ให้ใช้ -.->|\"ข้อความ\"| หรือ ==>|\"ข้อความ\"| แทน: {inner[:40]}"
+            return None
+
+        # 1.5) ข้อความบนเส้นแบบ -- ข้อความ --> ที่ไม่มีตัวปิดรูปทรงอยู่ภายใน ตรวจแล้วตัดออกก่อนหาโหนด
+        issue = edge_text_issues(masked, EDGE_TEXT_SAFE)
+        if issue:
+            warn(d.rel, start + 1 + k, issue)
+            continue
+        masked = EDGE_TEXT_SAFE.sub(r"\1 \2", masked)
         # 2) โหนด
         labels = node_labels(masked)
         for t, _, _, opener in labels:
             t = re.sub(r"<br\s*/?>", " ", t).strip()  # <br/> คือการขึ้นบรรทัดใหม่ของ Mermaid ใช้ได้โดยไม่ต้องครอบ
             if t == '""':
                 warn(d.rel, start + 1 + k, "ข้อความโหนดในผัง Mermaid เป็นเครื่องหมายคำพูดว่าง Mermaid ไม่รับ ให้ใส่ข้อความ")
+                warned = True
+                break
+            if opener == "[" and t[:1] in ("/", "\\"):
+                warn(d.rel, start + 1 + k, f"ข้อความโหนดที่ขึ้นต้นด้วย / หรือ \\ ต้องครอบด้วยเครื่องหมายคำพูด เพราะ Mermaid อ่านเป็นรูปทรง เช่น A[\"/api/v1\"]: {t[:40]}")
                 warned = True
                 break
             if not t or t == '"Q"':
@@ -396,22 +439,19 @@ def check_mermaid_labels(d, start, code):
         outside = masked
         for _, a, b, _ in sorted(labels, key=lambda x: -x[1]):
             outside = outside[:a] + outside[b:]
-        for m in EDGE_TEXT.finditer(outside):
-            inner = outside[m.start() + len(m.group(1)):m.end() - len(m.group(2))].strip()
-            if inner == '"Q"' or not inner:
-                continue
-            if '"' in inner:
-                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นแบบ -- ข้อความ --> มีเครื่องหมายคำพูดแต่ไม่ได้ครอบทั้งข้อความ ให้เขียน -- \"ข้อความ\" -->: {inner[:40]}")
-                warned = True
-                break
-            if (m.group(1) == "-." and "." in inner) or (m.group(1) == "==" and "=" in inner):
-                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นประหรือเส้นหนาแบบ -. ข้อความ .-> หรือ == ข้อความ ==> มีจุดหรือเครื่องหมายเท่ากับ ซึ่ง Mermaid อ่านเป็นตัวเส้น ให้ใช้ -.->|\"ข้อความ\"| หรือ ==>|\"ข้อความ\"| แทน: {inner[:40]}")
-                warned = True
-                break
-        if warned:
+        issue = edge_text_issues(outside, EDGE_TEXT)
+        if issue:
+            warn(d.rel, start + 1 + k, issue)
             continue
         outside = EDGE_TEXT.sub(r"\1 \2", outside)
         if stripped.lower().startswith("subgraph"):
+            # B2: ชื่อ subgraph แบบ subgraph S1 [ชื่อ] (เว้นวรรคได้) ตรวจเหมือนข้อความโหนด
+            sm = re.match(r"^subgraph\s+\S+?\s*\[(.*)\]\s*$", mask_quotes(stripped))
+            if sm:
+                title = sm.group(1).strip()
+                if title and title != '"Q"' and LABEL_BREAKERS.search(title):
+                    warn(d.rel, start + 1 + k, f"ชื่อ subgraph มีวงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งชื่อ: {title[:40]}")
+                    continue
             outside = outside.split("[", 1)[0]
         if SPACED_SHAPE.search(outside) and not LEADING_COMMAND.match(stripped):
             warn(d.rel, start + 1 + k, f"มีช่องว่างระหว่างรหัสโหนดกับรูปทรง เช่น A [x] Mermaid ไม่รับ ให้เขียนติดกัน A[x]: {stripped[:40]}")
@@ -419,6 +459,8 @@ def check_mermaid_labels(d, start, code):
         if THAI.search(outside):
             warn(d.rel, start + 1 + k, f"รหัสโหนดหรือชื่อ subgraph ในผัง flowchart เป็นภาษาไทย ซึ่ง Mermaid 11 ปฏิเสธเมื่ออยู่ต้นคำสั่งและไม่รับประกันตำแหน่งอื่น ให้ใช้รหัสละตินแล้วใส่ชื่อไทยในข้อความ เช่น A[เริ่ม] หรือ subgraph S1[ชื่อ]: {stripped[:40]}")
             continue
+        if re.match(r"^click(?![A-Za-z0-9_])", stripped):
+            continue  # click A href "url" และ click A call fn() เป็นไวยากรณ์ของ click เอง
         rest = LEADING_COMMAND.sub("", outside, count=1)
         for m in RESERVED.finditer(rest):
             nxt = rest[m.end():m.end() + 1]
@@ -722,15 +764,22 @@ def check_empty_sections(docs):
 
 
 # (รอยืนยัน) หรือ (จำนวนรูปรอยืนยัน) ไม่รวมชื่อสถานะเช่น รอยืนยันผล และโหมดกลับด้าน (ลูกค้ากำหนด)
-PENDING_MARK = re.compile(r"\([^()\n]*(?:รอยืนยัน|to be confirmed)\)|\((?:ลูกค้ากำหนด|client-specified)\)", re.IGNORECASE)
+# (รอยืนยัน) หรือ (จำนวนรูปรอยืนยัน) แต่ไม่นับชื่อสถานะในตาราง enum เช่น pending (รอยืนยัน) ซึ่งมีคำละตินนำหน้า และไม่นับวลีที่มีช่องว่าง เช่น (บันทึกนัด รอยืนยัน)
+PENDING_MARK = re.compile(r"\((?:[^()\s\n]*รอยืนยัน|to be confirmed)\)|\((?:ลูกค้ากำหนด|client-specified)\)", re.IGNORECASE)
+ENUM_LINE = re.compile(r"(?<![A-Za-z0-9_])enum(?![A-Za-z0-9_])", re.IGNORECASE)
+
+
+def mark_text(d):
+    """ข้อความของไฟล์สำหรับหาเครื่องหมาย ไม่รวมบรรทัดตาราง enum ซึ่งชื่อสถานะในวงเล็บไม่ใช่เครื่องหมาย"""
+    return "\n".join(l for l in d.lines if not ENUM_LINE.search(l))
 CLIENT_MARK = re.compile(r"\((?:ลูกค้ากำหนด|client-specified)\)", re.IGNORECASE)
 
 
 def check_pending_marks(docs):
     decisions = [d for d in docs if is_decisions(d)]
-    marked = [d for d in docs if PENDING_MARK.search(d.text) and d.rel != "README.md" and d not in decisions]
+    marked = [d for d in docs if PENDING_MARK.search(mark_text(d)) and d.rel != "README.md" and d not in decisions]
     for d in marked:
-        if CLIENT_MARK.search(d.text) and PENDING_MARK.search(CLIENT_MARK.sub("", d.text)):
+        if CLIENT_MARK.search(d.text) and PENDING_MARK.search(CLIENT_MARK.sub("", mark_text(d))):
             warn(d.rel, 0, "ไฟล์นี้ใช้ทั้ง (รอยืนยัน) และ (ลูกค้ากำหนด) ให้เลือกแบบเดียวต่อไฟล์")
     if marked and not decisions:
         return  # รายงานไว้แล้วว่าไม่พบไฟล์ประเด็นตัดสินใจ
