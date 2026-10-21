@@ -203,7 +203,8 @@ SHAPES = [("(((", [")))"]), ("([", ["])"]), ("[(", [")]"]), ("[[", ["]]"]), ("((
           ("[/", ["/]", "\\]"]), ("[\\", ["\\]", "/]"]), ("[", ["]"]), ("(", [")"]), ("{", ["}"]), (">", ["]"])]
 AFTER_CLOSE = re.compile(r"(?:\s|$|[-;&:=.~<])")  # สิ่งที่ตามหลังโหนดได้ เช่น ช่องว่าง ลูกศร ; & :::class ~~~ <-->
 EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")  # ข้อความบนเส้น -->|...| ใช้กฎเดียวกับโหนด เว้นแต่ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ
-EDGE_TEXT = re.compile(r"(--|-\.|==)\s*[^-=.|\n]*?\s*(-->|---|\.->|==>|\.-)")  # ข้อความบนเส้นแบบ A -- ข้อความ --> B
+EDGE_TEXT = re.compile(r"(--|-\.|==)(?![>.=-]?>)[^|\n]*?(-->|---|--[ox]|==>|===|==[ox]|\.->|\.-)")  # ข้อความบนเส้นแบบ A -- ข้อความ --> B รวม --o --x === และข้อความที่มี - . =
+SHAPE_SPEC = re.compile(r"@\{[^}\n]*\}")  # A@{ shape: rect, label: ... } ข้อความใน label ใช้เครื่องหมายคำพูดเดี่ยวหรือไม่ครอบก็ได้
 FLOW_KEYWORDS = ("subgraph", "end", "direction", "classdef", "class ", "style ", "linkstyle", "click ")
 
 
@@ -262,14 +263,36 @@ def check_mermaid_labels(d, start, code):
     first = next((l.strip() for _, l in body if l.strip() and not l.strip().startswith("%%")), "").lower()
     if not (first.startswith("flowchart") or first.startswith("graph")):
         return
+    in_quote = False  # ข้อความครอบเครื่องหมายคำพูดที่ขึ้นบรรทัดใหม่ภายใน
+    in_acc = False  # บล็อก accDescr { ... }
     for k, line in body:
         stripped = line.strip()
-        if not stripped or stripped.startswith("%%"):
+        if in_acc:
+            if "}" in stripped:
+                in_acc = False
             continue
-        if "%%" in QUOTED.sub('""', line):
-            warn(d.rel, start + 1 + k, "คอมเมนต์ %% ของผัง Mermaid ต้องอยู่บรรทัดของตัวเอง ต่อท้ายบรรทัดอื่นไม่ได้")
+        if stripped.lower().startswith("accdescr") and "{" in stripped and "}" not in stripped:
+            in_acc = True
+            continue
+        if in_quote:
+            if line.count('"') % 2 == 1:
+                in_quote = False
+            continue
+        if not stripped or stripped.startswith("%%") or stripped.lower().startswith(("acctitle", "accdescr")):
+            continue
+        if line.count('"') % 2 == 1:
+            in_quote = True
+            continue
+        if "%%" in QUOTED.sub('""', line) and not stripped.lower().startswith(FLOW_KEYWORDS):
+            warn(d.rel, start + 1 + k, "คอมเมนต์ %% ของผัง Mermaid ควรอยู่บรรทัดของตัวเอง เมื่อต่อท้ายบรรทัดโหนดหรือเส้น Mermaid 11 วาดไม่ได้")
             break
+        line = SHAPE_SPEC.sub("@{}", line)
         masked = QUOTED.sub('""', line)
+        for m in EDGE_TEXT.finditer(masked):
+            inner = masked[m.start() + len(m.group(1)):m.end() - len(m.group(2))].strip()
+            if '"' in inner and inner != '""':
+                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นแบบ -- ข้อความ --> มีเครื่องหมายคำพูดแต่ไม่ได้ครอบทั้งข้อความ ให้เขียน -- \"ข้อความ\" -->: {inner[:40]}")
+                break
         for m in EDGE_LABEL.finditer(masked):
             t = m.group(1).strip()
             if t and t != '""' and EDGE_BREAKERS.search(t):
@@ -296,13 +319,14 @@ def check_mermaid_labels(d, start, code):
         if stripped.lower().startswith(("subgraph", "class ", "classdef", "style ", "linkstyle", "click ")):
             outside = outside.split("[", 1)[0] if stripped.lower().startswith("subgraph") else outside
         if THAI.search(outside):
-            warn(d.rel, start + 1 + k, f"รหัสโหนดหรือชื่อ subgraph ในผัง flowchart เป็นภาษาไทย Mermaid วาดไม่ได้ ให้ใช้รหัสละตินแล้วใส่ชื่อไทยในข้อความ เช่น A[เริ่ม] หรือ subgraph S1[ชื่อ]: {stripped[:40]}")
+            warn(d.rel, start + 1 + k, f"รหัสโหนดหรือชื่อ subgraph ในผัง flowchart เป็นภาษาไทย ซึ่ง Mermaid 11 ปฏิเสธเมื่ออยู่ต้นคำสั่งและไม่รับประกันตำแหน่งอื่น ให้ใช้รหัสละตินแล้วใส่ชื่อไทยในข้อความ เช่น A[เริ่ม] หรือ subgraph S1[ชื่อ]: {stripped[:40]}")
 
 
 def check_fences(docs):
     known = ("flowchart", "graph", "sequencediagram", "statediagram", "erdiagram", "classdiagram",
              "gantt", "journey", "pie", "mindmap", "timeline", "quadrantchart", "gitgraph",
-             "c4context", "requirementdiagram", "block-beta", "sankey-beta", "xychart-beta")
+             "c4context", "c4container", "c4component", "c4dynamic", "c4deployment", "requirementdiagram",
+             "block-beta", "sankey-beta", "xychart-beta", "architecture-beta", "packet-beta", "kanban", "treemap-beta", "radar-beta")
     for d in docs:
         if d.fence_count % 2 != 0:
             err(d.rel, 0, "บล็อกโค้ด (```) เปิดปิดไม่ครบคู่")
