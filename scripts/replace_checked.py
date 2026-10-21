@@ -39,7 +39,7 @@ def all_docs(root):
         files.append(root / "README.md")
     for sub in ("docs", "plans"):
         if (root / sub).is_dir():
-            files.extend(sorted((root / sub).rglob("*.md")))
+            files.extend(sorted(p for p in (root / sub).rglob("*.md") if p.is_file()))
     # ไฟล์ 00- เป็นบันทึกข้อมูลต้นทางตามที่ได้รับ ไม่เปลี่ยนคำตามไฟล์อื่น ถ้าต้องแก้ให้ระบุชื่อไฟล์ตรง ๆ
     return [f for f in files if not f.name.startswith("00-")]
 

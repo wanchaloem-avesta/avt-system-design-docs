@@ -41,7 +41,7 @@ def warn(f, line, msg):
 
 # ---------- อ่านไฟล์และแยกส่วนที่เป็นโค้ด ----------
 
-FENCE = re.compile(r"^\s*(```|~~~)")
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 NUM_TOKEN = re.compile(r"^(\d+(?:\.\d+)*)\.?(?=\s|$|:)")
 LIST_NUM = re.compile(r"^\s*[-*]\s+(\d+(?:\.\d+)+)\s")
@@ -51,7 +51,7 @@ class Doc:
     def __init__(self, path, root):
         self.path = path
         self.rel = path.relative_to(root).as_posix()
-        self.text = path.read_text(encoding="utf-8", errors="replace")
+        self.text = path.read_text(encoding="utf-8-sig", errors="replace")  # utf-8-sig ตัด BOM ออก เพื่อให้หัวข้อบรรทัดแรกถูกอ่าน
         self.lines = self.text.splitlines()
         self.in_code = []          # แต่ละบรรทัดอยู่ในบล็อกโค้ดหรือไม่
         self.headings = []         # (line_no, level, text)
@@ -62,14 +62,18 @@ class Doc:
     def _scan(self):
         inside = False
         lang = ""
+        marker = ""
         buf = []
         start = 0
         for i, line in enumerate(self.lines, 1):
-            if FENCE.match(line):
+            fm = FENCE.match(line)
+            # รั้วปิดต้องเป็นอักขระชนิดเดียวกับรั้วเปิดและยาวไม่น้อยกว่า ตามกฎ Markdown เพื่อให้ ``` ซ้อนใน ```` ไม่สลับสถานะผิด
+            if fm and (not inside or (fm.group(1)[0] == marker[0] and len(fm.group(1)) >= len(marker) and not line.strip()[len(fm.group(1)):].strip())):
                 self.fence_count += 1
                 if not inside:
                     inside = True
-                    lang = line.strip().lstrip("`~").strip().lower()
+                    marker = fm.group(1)
+                    lang = line.strip()[len(marker):].strip().lower()
                     buf = []
                     start = i
                 else:
@@ -77,6 +81,7 @@ class Doc:
                         self.mermaid.append((start, "\n".join(buf)))
                     inside = False
                     lang = ""
+                    marker = ""
                 self.in_code.append(True)
                 continue
             self.in_code.append(inside)
@@ -138,11 +143,11 @@ def check_structure(root):
         err("README.md", 0, "ไม่พบ README.md")
     if not docs.is_dir():
         err("docs/", 0, "ไม่พบโฟลเดอร์ docs/")
-    elif not list(docs.glob("*.md")):
+    elif not [x for x in docs.glob("*.md") if x.is_file()]:
         err("docs/", 0, "โฟลเดอร์ docs/ ไม่มีไฟล์ .md")
     if not plans.is_dir():
         err("plans/", 0, "ไม่พบโฟลเดอร์ plans/")
-    elif not list(plans.glob("*.md")):
+    elif not [x for x in plans.glob("*.md") if x.is_file()]:
         err("plans/", 0, "โฟลเดอร์ plans/ ไม่มีไฟล์ .md")
     # สิ่งอื่นในโฟลเดอร์โครงการนอกจาก 3 อย่างนี้ รายงานเป็นคำเตือนเพื่อให้รู้ว่ามี ไม่ได้บอกให้ลบ เพราะมักเป็นไฟล์ข้อกำหนดของผู้ใช้
     allowed = {"README.md", "docs", "plans", ".git", ".gitignore", ".gitattributes"}
@@ -153,6 +158,11 @@ def check_structure(root):
     for sub in (docs, plans):
         if sub.is_dir():
             for item in sorted(sub.iterdir()):
+                if item.name.startswith("."):
+                    continue
+                if item.is_dir():
+                    warn(f"{sub.name}/{item.name}/", 0, "เป็นโฟลเดอร์ย่อย ชุดเอกสารไม่ใช้โฟลเดอร์ย่อยใน docs/ หรือ plans/")
+                    continue
                 if item.suffix.lower() != ".md":
                     warn(f"{sub.name}/{item.name}", 0, "ไม่ใช่ไฟล์ .md ชุดเอกสารมีเฉพาะไฟล์ Markdown ห้ามลบหรือย้ายถ้าคุณไม่ได้สร้างเอง")
 
@@ -162,7 +172,7 @@ def check_numbering(root):
     if not docs.is_dir():
         return
     seen = {}
-    for p in sorted(docs.glob("*.md")):
+    for p in sorted(x for x in docs.glob("*.md") if x.is_file()):
         m = re.match(r"^(\d\d)-[a-z0-9][a-z0-9-]*\.md$", p.name)
         if not m:
             warn(f"docs/{p.name}", 0, "ชื่อไฟล์ไม่ได้อยู่ในรูปแบบ เลข 2 หลัก-ชื่อตัวพิมพ์เล็กคั่นด้วยขีดกลาง.md")
@@ -182,8 +192,10 @@ def check_numbering(root):
 
 
 # ข้อความใน [] () {} ของ flowchart ที่มีวงเล็บ ทับ หรือโคลอน แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูด จะทำให้ผังวาดไม่ได้
-LABEL = re.compile(r"[A-Za-z0-9_\u0E00-\u0E7F]+\s*(\[\(|\[/|\[\\|\[\[|\(\(|\{\{|\[|\(|\{|>)\s*"
-                   r"(\"[^\"\n]*\"|[^\]\)\}\n\"]*?)\s*(\)\]|/\]|\\\]|\]\]|\)\)|\}\}|\]|\)|\})")
+# อักขระที่ทำให้ Mermaid 11 วาดไม่ได้เมื่ออยู่ในข้อความที่ไม่ได้ครอบด้วยเครื่องหมายคำพูด: วงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ และเครื่องหมายคำพูดเอง
+LABEL_BREAKERS = re.compile(r"[()\[\]{}|@\"]")
+LABEL = re.compile(r"[A-Za-z0-9_\u0E00-\u0E7F]+\s*(\(\[|\[\(|\[/|\[\\|\[\[|\(\(|\{\{|\[|\(|\{|>)\s*"
+                   r"(\"[^\"\n]*\"|[^\]\)\}\n]*?)\s*(\]\)|\)\]|/\]|\\\]|\]\]|\)\)|\}\}|\]|\)|\})")
 EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")
 
 
@@ -197,8 +209,8 @@ def check_mermaid_labels(d, start, code):
             t = re.sub(r"<br\s*/?>", " ", t).strip()  # <br/> คือการขึ้นบรรทัดใหม่ของ Mermaid ใช้ได้โดยไม่ต้องครอบ
             if not t or (t.startswith('"') and t.endswith('"')):
                 continue
-            if re.search(r"[()/:]", t):
-                warn(d.rel, start + 1 + k, f"ข้อความในผัง Mermaid มีวงเล็บ ทับ หรือโคลอน แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูด: {t[:40]}")
+            if LABEL_BREAKERS.search(t):
+                warn(d.rel, start + 1 + k, f"ข้อความในผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ (เครื่องหมายคำพูดภายในใช้ #quot;): {t[:40]}")
                 break
 
 
@@ -381,6 +393,8 @@ def check_section_refs(root, docs):
             if flows:
                 for m in re.finditer(FLOW_WORD + r"\s+(?=\d)", line):
                     for n in parse_numbers(line[m.end():]):
+                        if len(n) > 3:
+                            continue  # เลข 4 หลักขึ้นไป เช่น ปี ไม่ใช่เลข Flow
                         if n not in flow_nums:
                             err(d.rel, i, f"อ้างถึง Flow {n} แต่ไฟล์ลำดับการทำงานไม่มีหัวข้อ Flow {n}")
             if decisions:
@@ -398,7 +412,7 @@ def check_readme_lists_files(root, docs):
         folder = root / sub
         if not folder.is_dir():
             continue
-        for p in sorted(folder.glob("*.md")):
+        for p in sorted(x for x in folder.glob("*.md") if x.is_file()):
             if p.name not in readme.text:
                 err("README.md", 0, f"README ไม่ได้กล่าวถึงไฟล์ {sub}/{p.name}")
     # ชื่อไฟล์ที่ README กล่าวถึง รวมในแผนผังต้นไม้ที่อยู่ในบล็อกโค้ด ต้องมีจริง
@@ -710,7 +724,7 @@ def main():
         paths.append(root / "README.md")
     for sub in ("docs", "plans"):
         if (root / sub).is_dir():
-            paths.extend(sorted((root / sub).rglob("*.md")))
+            paths.extend(sorted(p for p in (root / sub).rglob("*.md") if p.is_file()))
     docs = [Doc(p, root) for p in paths]
 
     check_fences(docs)
