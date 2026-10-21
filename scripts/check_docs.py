@@ -144,6 +144,17 @@ def check_structure(root):
         err("plans/", 0, "ไม่พบโฟลเดอร์ plans/")
     elif not list(plans.glob("*.md")):
         err("plans/", 0, "โฟลเดอร์ plans/ ไม่มีไฟล์ .md")
+    # สิ่งอื่นในโฟลเดอร์โครงการนอกจาก 3 อย่างนี้ (ยกเว้นไฟล์ของ git และไฟล์ต้นทางของลูกค้าที่ผู้ใช้วางไว้เอง)
+    allowed = {"README.md", "docs", "plans", ".git", ".gitignore", ".gitattributes"}
+    for item in sorted(root.iterdir()):
+        if item.name in allowed or item.name.startswith("."):
+            continue
+        warn(item.name, 0, "อยู่ในโฟลเดอร์โครงการแต่ไม่ใช่ README.md, docs/ หรือ plans/ ถ้าเป็นไฟล์ชั่วคราวของสคริปต์ให้ลบ ถ้าเป็นไฟล์ต้นทางของผู้ใช้ไม่ต้องทำอะไร")
+    for sub in (docs, plans):
+        if sub.is_dir():
+            for item in sorted(sub.iterdir()):
+                if item.suffix.lower() != ".md":
+                    warn(f"{sub.name}/{item.name}", 0, "ไม่ใช่ไฟล์ .md ชุดเอกสารมีเฉพาะไฟล์ Markdown")
 
 
 def check_numbering(root):
@@ -268,10 +279,10 @@ def check_file_refs(root, docs):
 # ยอมให้ชื่อไฟล์ถูกคร่อมด้วย ` ** " หรือเป็นลิงก์ [ชื่อ](ชื่อ) ก่อนคำว่า ข้อ
 WRAP = r"[`*\"'\u201c\u201d\u2018\u2019)]*"  # เครื่องหมายที่คร่อมชื่อไฟล์ได้: ` * \" ' “ ” ‘ ’ )
 # ระหว่างชื่อไฟล์กับคำว่า ข้อ ยอมให้มีช่องว่าง วงเล็บเปิด โคลอน จุลภาค หรือขีด เช่น "02-features.md (ข้อ 1.2)"
-SECTION_REF = re.compile(r"((?:[A-Za-z0-9_.-]+/)*\d\d-[a-z0-9-]+\.md)" + WRAP + r"(?:\]\([^)\s]*\))?" + WRAP + r"[\s(:,;\u2013\u2014-]*(?:ข้อ|หัวข้อ|หัวข้อที่|section)\s+", re.IGNORECASE)
+SECTION_REF = re.compile(r"((?:[A-Za-z0-9_.-]+/)*\d\d-[a-z0-9-]+\.md)" + WRAP + r"(?:\]\([^)\s]*\))?" + WRAP + r"[\s(:,;\u2013\u2014-]*(?:ข้อที่|ข้อ|หัวข้อที่|หัวข้อ|หมวดที่|หมวด|ส่วนที่|section)\s+", re.IGNORECASE)
 DECISION_REF = re.compile(r"(?:ประเด็นที่|(?<![A-Za-z0-9_])Decisions?)\s+#?(?=\d)", re.IGNORECASE)
 CLOSE_LINE = re.compile(r"^\*\*[^*\n]*(?:ประเด็นที่ต้องปิด|Decisions to close)[^*\n]*:\*\*\s*(.*)$", re.IGNORECASE)
-FLOW_WORD = r"(?<![A-Za-z0-9_])Flow"
+FLOW_WORD = r"(?<![A-Za-z0-9_])Flow(?:\s*ที่)?"
 # เลขที่ตามด้วยขีดและตัวอักษร เช่น 03-flows.md เป็นชื่อไฟล์ ไม่ใช่เลขข้อ
 NUMBER = re.compile(r"(\d+(?:\.\d+)*)(?![\d.]*-[A-Za-z])")
 SEP = re.compile(r"\s*(,|และ|and)\s*")
@@ -343,9 +354,13 @@ def check_section_refs(root, docs):
     decision_nums = set()
     for d in decisions:
         decision_nums |= d.heading_numbers()
-    if not flows:
+    if any(d.fence_count % 2 for d in flows):
+        flows = []  # รั้วโค้ดไม่ปิดทำให้หัวข้อ Flow ถูกกลืน ข้ามการตรวจอ้าง Flow จนกว่าจะแก้รั้ว
+    if any(d.fence_count % 2 for d in decisions):
+        decisions = []
+    if not flows and not any(is_flows(d) for d in docs):
         err("docs/", 0, "ไม่พบไฟล์ลำดับการทำงาน (ชื่อไฟล์ต้องมีคำว่า flows) จึงตรวจการอ้าง Flow ไม่ได้")
-    if not decisions:
+    if not decisions and not any(is_decisions(d) for d in docs):
         err("docs/", 0, "ไม่พบไฟล์ประเด็นตัดสินใจ (ชื่อไฟล์ต้องมีคำว่า decisions) จึงตรวจการอ้างประเด็นไม่ได้")
 
     for d in docs:
@@ -356,6 +371,8 @@ def check_section_refs(root, docs):
                 target = by_name.get(Path(m.group(1)).name)
                 if not target:
                     continue  # ไฟล์ไม่มีอยู่ ถูกรายงานแล้วในการตรวจไฟล์
+                if target.fence_count % 2 != 0:
+                    continue  # ไฟล์ปลายทางมีบล็อกโค้ดไม่ปิด หัวข้อถูกกลืน รายงานเรื่องรั้วไว้แล้ว แก้รั้วก่อน
                 have = target.referable_numbers()
                 for n in parse_numbers(line[m.end():]):
                     if n not in have:
@@ -449,6 +466,12 @@ def check_leftovers(docs):
 
 def check_empty_sections(docs):
     for d in docs:
+        # ไฟล์ที่ไม่มีเนื้อหาเลยนอกจากหัวข้อ
+        body_lines = [l for i, l in d.prose_lines() if l.strip() and l.strip() != "---" and not HEADING.match(l)]
+        has_code = any(d.in_code)
+        if not body_lines and not has_code:
+            err(d.rel, 0, "ไฟล์ไม่มีเนื้อหา มีแต่หัวข้อหรือว่างเปล่า")
+            continue
         hs = d.headings
         for idx, (line_no, level, text) in enumerate(hs):
             end = hs[idx + 1][0] - 1 if idx + 1 < len(hs) else len(d.lines)
@@ -457,8 +480,8 @@ def check_empty_sections(docs):
                 continue
             if idx + 1 < len(hs) and hs[idx + 1][1] > level:
                 continue  # หัวข้อที่มีแต่หัวข้อย่อย ถือว่ามีเนื้อหา
-            if line_no <= 3:
-                continue  # ชื่อเอกสารและชื่อรองที่ต้นไฟล์
+            if line_no <= 3 and idx + 1 < len(hs):
+                continue  # ชื่อเอกสารและชื่อรองที่ต้นไฟล์ ยกเว้นเมื่อเป็นหัวข้อสุดท้ายของไฟล์
             warn(d.rel, line_no, f"หัวข้อไม่มีเนื้อหา: {text}")
 
 
