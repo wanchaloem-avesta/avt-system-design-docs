@@ -211,6 +211,11 @@ def check_fences(docs):
 # ใช้เฉพาะอักษรละติน เพื่อไม่ให้คำไทยที่ติดกับชื่อไฟล์ถูกกลืนเข้าไปในชื่อไฟล์
 FILE_TOKEN = re.compile(r"(?<![A-Za-z0-9_/.-])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.md)(?![A-Za-z0-9_-])")
 MD_LINK = re.compile(r"\]\(([^)\s]+)\)")
+MD_LINK_FULL = re.compile(r"\[[^\]\n]*\]\([^)\s]*\)")  # ลิงก์ทั้งก้อน ตัดออกก่อนหา FILE_TOKEN เพราะปลายทางตรวจแยกแล้ว
+
+
+def norm_token(tok):
+    return re.sub(r"^\./", "", tok)
 
 
 def resolve(root, doc, token):
@@ -242,8 +247,8 @@ def check_file_refs(root, docs):
         if is_source_doc(d) or d.rel == "README.md":
             continue  # README ตรวจแยกใน check_readme_lists_files รวมบล็อกโค้ด
         for i, line in d.prose_lines():
-            for m in FILE_TOKEN.finditer(MD_LINK.sub("]()", line)):  # ปลายทางของลิงก์ตรวจแยกด้านล่าง ไม่รายงานซ้ำ
-                tok = m.group(1)
+            for m in FILE_TOKEN.finditer(MD_LINK_FULL.sub(" ", line)):  # ปลายทางของลิงก์ตรวจแยกด้านล่าง ไม่รายงานซ้ำ
+                tok = norm_token(m.group(1))
                 if any(c in tok for c in "<>*{}"):
                     continue
                 if Path(tok).name in source_names and not re.match(r"^(docs|plans)/", tok):
@@ -251,16 +256,19 @@ def check_file_refs(root, docs):
                 if not resolve(root, d, tok):
                     err(d.rel, i, f"อ้างถึงไฟล์ที่ไม่มีอยู่: {tok}")
             for m in MD_LINK.finditer(line):
-                target = m.group(1)
+                target = norm_token(m.group(1))
                 if re.match(r"^[a-z][a-z0-9+.-]*:", target) or target.startswith("#"):
+                    continue
+                if Path(target).name in source_names and not re.match(r"^(docs|plans)/", target):
                     continue
                 if not resolve(root, d, target):
                     err(d.rel, i, f"ลิงก์ชี้ไปยังไฟล์ที่ไม่มีอยู่: {target}")
 
 
 # ยอมให้ชื่อไฟล์ถูกคร่อมด้วย ` ** " หรือเป็นลิงก์ [ชื่อ](ชื่อ) ก่อนคำว่า ข้อ
-SECTION_REF = re.compile(r"((?:[A-Za-z0-9_.-]+/)*\d\d-[a-z0-9-]+\.md)(?:\]\([^)\s]*\))?[`*\"]*\s+(?:ข้อ|หัวข้อ|หัวข้อที่|section)\s+", re.IGNORECASE)
-DECISION_REF = re.compile(r"(?:ประเด็นที่|(?<![A-Za-z0-9_])Decision)\s+(?=\d)", re.IGNORECASE)
+WRAP = r"[`*\"'\u201c\u201d\u2018\u2019)]*"  # เครื่องหมายที่คร่อมชื่อไฟล์ได้: ` * \" ' “ ” ‘ ’ )
+SECTION_REF = re.compile(r"((?:[A-Za-z0-9_.-]+/)*\d\d-[a-z0-9-]+\.md)" + WRAP + r"(?:\]\([^)\s]*\))?" + WRAP + r"\s+(?:ข้อ|หัวข้อ|หัวข้อที่|section)\s+", re.IGNORECASE)
+DECISION_REF = re.compile(r"(?:ประเด็นที่|(?<![A-Za-z0-9_])Decisions?)\s+#?(?=\d)", re.IGNORECASE)
 CLOSE_LINE = re.compile(r"^\*\*[^*\n]*(?:ประเด็นที่ต้องปิด|Decisions to close)[^*\n]*:\*\*\s*(.*)$", re.IGNORECASE)
 FLOW_WORD = r"(?<![A-Za-z0-9_])Flow"
 # เลขที่ตามด้วยขีดและตัวอักษร เช่น 03-flows.md เป็นชื่อไฟล์ ไม่ใช่เลขข้อ
@@ -377,8 +385,8 @@ def check_readme_lists_files(root, docs):
     # ชื่อไฟล์ที่ README กล่าวถึง รวมในแผนผังต้นไม้ที่อยู่ในบล็อกโค้ด ต้องมีจริง
     source_names = customer_file_names(docs)
     for i, line in enumerate(readme.lines, 1):
-        for m in FILE_TOKEN.finditer(MD_LINK.sub("]()", line)):
-            tok = m.group(1)
+        for m in FILE_TOKEN.finditer(MD_LINK_FULL.sub(" ", line)):
+            tok = norm_token(m.group(1))
             if any(c in tok for c in "<>*{}"):
                 continue
             if Path(tok).name in source_names and not re.match(r"^(docs|plans)/", tok):
@@ -387,8 +395,10 @@ def check_readme_lists_files(root, docs):
                 err("README.md", i, f"README กล่าวถึงไฟล์ที่ไม่มีอยู่: {tok}")
         if not readme.in_code[i - 1]:
             for m in MD_LINK.finditer(line):
-                target = m.group(1)
+                target = norm_token(m.group(1))
                 if re.match(r"^[a-z][a-z0-9+.-]*:", target) or target.startswith("#"):
+                    continue
+                if Path(target).name in source_names and not re.match(r"^(docs|plans)/", target):
                     continue
                 if not resolve(root, readme, target):
                     err("README.md", i, f"ลิงก์ชี้ไปยังไฟล์ที่ไม่มีอยู่: {target}")
@@ -413,7 +423,8 @@ def check_invented_codes(docs):
 
 LEFTOVER = re.compile(r"\b(TODO|TBD|FIXME|Lorem ipsum)\b")
 # ไม่นับ List<TYPE> (มีอักษรละตินติดหน้า <) และเครื่องหมายเปรียบเทียบ เช่น "< 1000 บาท และ >" (หลัง < เป็นช่องว่าง)
-PLACEHOLDER = re.compile(r"(?<![A-Za-z0-9_])<([A-Za-z\u0E00-\u0E7F][^<>\n@]{0,60})>")
+# รวม <...> และ <…> ที่คัดมาจากโครงแล้วยังไม่ได้แทน
+PLACEHOLDER = re.compile(r"(?<![A-Za-z0-9_])<((?:[A-Za-z\u0E00-\u0E7F][^<>\n@]{0,60})|(?:(?:\.{2,}|\u2026)[^<>\n]{0,60}))>")
 HTML_TAGS = {"br", "b", "i", "u", "em", "strong", "sub", "sup", "kbd", "span", "div", "p", "a", "img",
              "details", "summary", "table", "tr", "td", "th", "thead", "tbody", "ul", "ol", "li", "hr", "code", "pre"}
 
