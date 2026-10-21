@@ -68,6 +68,8 @@ class Doc:
         for i, line in enumerate(self.lines, 1):
             fm = FENCE.match(line)
             # รั้วปิดต้องเป็นอักขระชนิดเดียวกับรั้วเปิดและยาวไม่น้อยกว่า ตามกฎ Markdown เพื่อให้ ``` ซ้อนใน ```` ไม่สลับสถานะผิด
+            if fm and not inside and fm.group(1)[0] == "`" and "`" in line.strip()[len(fm.group(1)):]:
+                fm = None  # ```x``` ต้นบรรทัดคือโค้ดในบรรทัด ไม่ใช่รั้ว (CommonMark: info string มีแบ็กทิกไม่ได้)
             if fm and (not inside or (fm.group(1)[0] == marker[0] and len(fm.group(1)) >= len(marker) and not line.strip()[len(fm.group(1)):].strip())):
                 self.fence_count += 1
                 if not inside:
@@ -344,6 +346,7 @@ def check_mermaid_labels(d, start, code):
         return
     in_quote = -1  # บรรทัดที่เปิดเครื่องหมายคำพูดแล้วยังไม่ปิด (ข้อความหลายบรรทัด)
     in_acc = False  # บล็อก accDescr { ... }
+    open_node = False  # บรรทัดก่อนเปิดรูปทรงแล้วไม่ปิด บรรทัดต่อไปจนถึงตัวปิดเป็นส่วนของข้อความนั้น
     first_k = next((k for k, l in body if l.strip() and not l.strip().startswith("%%")), -1)
     depth = 0  # subgraph ที่เปิดอยู่
     for k, line in body:
@@ -362,6 +365,10 @@ def check_mermaid_labels(d, start, code):
             continue
         if stripped.lower().startswith("accdescr") and "{" in stripped and "}" not in stripped:
             in_acc = True
+            continue
+        if open_node:
+            if re.search(r"[\])}]", line):
+                open_node = False
             continue
         if in_quote >= 0:
             if line.count('"') % 2 == 0:
@@ -414,13 +421,25 @@ def check_mermaid_labels(d, start, code):
         masked = EDGE_TEXT_SAFE.sub(r"\1 \2", masked)
         # 2) โหนด
         labels = node_labels(masked)
+        # โหนดที่เปิดรูปทรงแล้วไม่ปิดในบรรทัดเดียวกัน คือข้อความที่ขึ้นบรรทัดใหม่โดยไม่ครอบเครื่องหมายคำพูด
+        leftover = masked
+        for _, a, b, op in sorted(labels, key=lambda x: -x[1]):
+            leftover = leftover[:a - len(op)] + leftover[b:]  # ตัดทั้งตัวเปิด ข้อความ และตัวปิด
+        if re.search(r"[A-Za-z0-9_\u0E00-\u0E7F][\[({]", leftover):
+            warn(d.rel, start + 1 + k, f"โหนดเปิดรูปทรงแล้วไม่ปิดในบรรทัดเดียวกัน ข้อความหลายบรรทัดต้องครอบด้วยเครื่องหมายคำพูดหรือใช้ <br/>: {stripped[:40]}")
+            open_node = True
+            continue
+        if re.search(r"(?<=[\])}])&|&(?=[A-Za-z0-9_]+[\[({])", masked):
+            warn(d.rel, start + 1 + k, f"เครื่องหมาย & ที่ติดกับโหนดที่มีรูปทรงต้องมีช่องว่างทั้งสองข้าง เช่น A[x] & B[y]: {stripped[:40]}")
+            continue
         for t, _, _, opener in labels:
+            raw_first = t[:1]  # อักขระแรกก่อนตัดช่องว่าง เพราะ "[ /api]" ที่มีช่องว่างนำ Mermaid รับ
             t = re.sub(r"<br\s*/?>", " ", t).strip()  # <br/> คือการขึ้นบรรทัดใหม่ของ Mermaid ใช้ได้โดยไม่ต้องครอบ
             if t == '""':
                 warn(d.rel, start + 1 + k, "ข้อความโหนดในผัง Mermaid เป็นเครื่องหมายคำพูดว่าง Mermaid ไม่รับ ให้ใส่ข้อความ")
                 warned = True
                 break
-            if opener == "[" and t[:1] in ("/", "\\"):
+            if opener == "[" and raw_first in ("/", "\\"):
                 warn(d.rel, start + 1 + k, f"ข้อความโหนดที่ขึ้นต้นด้วย / หรือ \\ ต้องครอบด้วยเครื่องหมายคำพูด เพราะ Mermaid อ่านเป็นรูปทรง เช่น A[\"/api/v1\"]: {t[:40]}")
                 warned = True
                 break
@@ -449,6 +468,9 @@ def check_mermaid_labels(d, start, code):
             sm = re.match(r"^subgraph\s+\S+?\s*\[(.*)\]\s*$", mask_quotes(stripped))
             if sm:
                 title = sm.group(1).strip()
+                if sm.group(1)[:1] in ("/", "\\"):
+                    warn(d.rel, start + 1 + k, f"ชื่อ subgraph ที่ขึ้นต้นด้วย / หรือ \\ ต้องครอบด้วยเครื่องหมายคำพูด: {title[:40]}")
+                    continue
                 if title and title != '"Q"' and LABEL_BREAKERS.search(title):
                     warn(d.rel, start + 1 + k, f"ชื่อ subgraph มีวงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งชื่อ: {title[:40]}")
                     continue
