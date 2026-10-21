@@ -144,17 +144,17 @@ def check_structure(root):
         err("plans/", 0, "ไม่พบโฟลเดอร์ plans/")
     elif not list(plans.glob("*.md")):
         err("plans/", 0, "โฟลเดอร์ plans/ ไม่มีไฟล์ .md")
-    # สิ่งอื่นในโฟลเดอร์โครงการนอกจาก 3 อย่างนี้ (ยกเว้นไฟล์ของ git และไฟล์ต้นทางของลูกค้าที่ผู้ใช้วางไว้เอง)
+    # สิ่งอื่นในโฟลเดอร์โครงการนอกจาก 3 อย่างนี้ รายงานเป็นคำเตือนเพื่อให้รู้ว่ามี ไม่ได้บอกให้ลบ เพราะมักเป็นไฟล์ข้อกำหนดของผู้ใช้
     allowed = {"README.md", "docs", "plans", ".git", ".gitignore", ".gitattributes"}
     for item in sorted(root.iterdir()):
         if item.name in allowed or item.name.startswith("."):
             continue
-        warn(item.name, 0, "อยู่ในโฟลเดอร์โครงการแต่ไม่ใช่ README.md, docs/ หรือ plans/ ถ้าเป็นไฟล์ชั่วคราวของสคริปต์ให้ลบ ถ้าเป็นไฟล์ต้นทางของผู้ใช้ไม่ต้องทำอะไร")
+        warn(item.name, 0, "ไม่ใช่ส่วนของชุดเอกสาร ห้ามลบหรือย้ายถ้าคุณไม่ได้สร้างเอง เช่น ไฟล์ข้อกำหนดที่ผู้ใช้วางไว้ ลบได้เฉพาะไฟล์ชั่วคราวที่คุณสร้างเองในการทำงานครั้งนี้")
     for sub in (docs, plans):
         if sub.is_dir():
             for item in sorted(sub.iterdir()):
                 if item.suffix.lower() != ".md":
-                    warn(f"{sub.name}/{item.name}", 0, "ไม่ใช่ไฟล์ .md ชุดเอกสารมีเฉพาะไฟล์ Markdown")
+                    warn(f"{sub.name}/{item.name}", 0, "ไม่ใช่ไฟล์ .md ชุดเอกสารมีเฉพาะไฟล์ Markdown ห้ามลบหรือย้ายถ้าคุณไม่ได้สร้างเอง")
 
 
 def check_numbering(root):
@@ -280,7 +280,8 @@ def check_file_refs(root, docs):
 WRAP = r"[`*\"'\u201c\u201d\u2018\u2019)]*"  # เครื่องหมายที่คร่อมชื่อไฟล์ได้: ` * \" ' “ ” ‘ ’ )
 # ระหว่างชื่อไฟล์กับคำว่า ข้อ ยอมให้มีช่องว่าง วงเล็บเปิด โคลอน จุลภาค หรือขีด เช่น "02-features.md (ข้อ 1.2)"
 SECTION_REF = re.compile(r"((?:[A-Za-z0-9_.-]+/)*\d\d-[a-z0-9-]+\.md)" + WRAP + r"(?:\]\([^)\s]*\))?" + WRAP + r"[\s(:,;\u2013\u2014-]*(?:ข้อที่|ข้อ|หัวข้อที่|หัวข้อ|หมวดที่|หมวด|ส่วนที่|section)\s+", re.IGNORECASE)
-DECISION_REF = re.compile(r"(?:ประเด็นที่|(?<![A-Za-z0-9_])Decisions?)\s+#?(?=\d)", re.IGNORECASE)
+# Decision ต้อง D ตัวใหญ่ เพื่อไม่ให้ "the decision 30 days" ในประโยคอังกฤษถูกอ่านเป็นการอ้างประเด็น
+DECISION_REF = re.compile(r"(?:ประเด็นที่|(?<![A-Za-z0-9_])Decisions?)\s+#?(?=\d)")
 CLOSE_LINE = re.compile(r"^\*\*[^*\n]*(?:ประเด็นที่ต้องปิด|Decisions to close)[^*\n]*:\*\*\s*(.*)$", re.IGNORECASE)
 FLOW_WORD = r"(?<![A-Za-z0-9_])Flow(?:\s*ที่)?"
 # เลขที่ตามด้วยขีดและตัวอักษร เช่น 03-flows.md เป็นชื่อไฟล์ ไม่ใช่เลขข้อ
@@ -303,7 +304,7 @@ def expand_range(a, b):
 
 def ends_phrase(text, pos):
     """เลขที่ตำแหน่ง pos จบวลีหรือไม่ คือตามด้วยจบบรรทัด เครื่องหมายวรรคตอน หรือตัวคั่นเลขถัดไป"""
-    return re.match(r"\s*(?:$|[,;:()\]}.]|และ|and\b|ถึง|to\b|[-–](?=\s*\d))", text[pos:]) is not None
+    return re.match(r"\s*(?:$|[,;:()\]}.|]|และ|and\b|ถึง|to\b|[-–](?=\s*\d))", text[pos:]) is not None
 
 
 def parse_numbers(text):
@@ -480,8 +481,8 @@ def check_empty_sections(docs):
                 continue
             if idx + 1 < len(hs) and hs[idx + 1][1] > level:
                 continue  # หัวข้อที่มีแต่หัวข้อย่อย ถือว่ามีเนื้อหา
-            if line_no <= 3 and idx + 1 < len(hs):
-                continue  # ชื่อเอกสารและชื่อรองที่ต้นไฟล์ ยกเว้นเมื่อเป็นหัวข้อสุดท้ายของไฟล์
+            if line_no <= 3 and idx + 1 < len(hs) and (level == 1 or (level == 2 and idx == 1 and hs[0][1] == 1 and not NUM_TOKEN.match(text))):
+                continue  # ชื่อเอกสาร (H1) และชื่อรอง (H2 ไม่มีเลข ถัดจาก H1) ที่ต้นไฟล์ ยกเว้นเมื่อเป็นหัวข้อสุดท้ายของไฟล์
             warn(d.rel, line_no, f"หัวข้อไม่มีเนื้อหา: {text}")
 
 
@@ -524,8 +525,8 @@ def table_rows(doc, start, end):
 def check_decision_summary(docs):
     """ตารางสรุปประเด็นต้องมีเลขตรงกับหัวข้อประเด็นจริง"""
     for d in docs:
-        if not is_decisions(d):
-            continue
+        if not is_decisions(d) or d.fence_count % 2 != 0:
+            continue  # รั้วโค้ดไม่ปิดทำให้หัวข้อถูกกลืน รายงานเรื่องรั้วไว้แล้ว
         all_nums = [NUM_TOKEN.match(t).group(1) for _, _, t in d.headings if NUM_TOKEN.match(t)]
         digit_nums = [n for n in all_nums if n.isdigit()]
         for n in sorted({x for x in digit_nums if digit_nums.count(x) > 1}, key=int):
@@ -561,7 +562,9 @@ def actual_counts(docs):
             if flows:
                 out.append(f"{d.rel}: Flow {len(flows)} เรื่อง")
                 all_flows[d.rel] = flows
-        if is_decisions(d):
+        if is_decisions(d) and d.fence_count % 2 != 0:
+            out.append(f"{d.rel}: มีบล็อกโค้ดไม่ปิด จำนวนประเด็นนับไม่ได้จนกว่าจะแก้")
+        elif is_decisions(d):
             nums = [n for n in d.heading_numbers() if n.isdigit()]
             statuses = {}
             for line in d.lines:
