@@ -194,18 +194,35 @@ def check_numbering(root):
 # ตรวจข้อความในโหนดของ flowchart: อักขระที่ทำให้ Mermaid 11 วาดไม่ได้เมื่ออยู่ในข้อความที่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ
 # คือ วงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ และเครื่องหมายคำพูดเอง ส่วนโคลอนและทับใช้ได้ (ยืนยันกับ mermaid@11 ด้วย mermaid.parse)
 LABEL_BREAKERS = re.compile(r"[()\[\]{}|@\"]")
+EDGE_BREAKERS = re.compile(r"[()\[\]{}\"@]")
 QUOTED = re.compile(r"\"[^\"\n]*\"")
-NODE_ID = re.compile(r"[A-Za-z0-9_\u0E00-\u0E7F]+\s*")
-# ตัวเปิดของแต่ละรูปทรง เรียงยาวก่อนสั้น และตัวปิดที่คู่กัน
-SHAPES = [("([", "])"), ("[(", ")]"), ("[[", "]]"), ("((", "))"), ("{{", "}}"), ("[/", "/]"), ("[\\", "\\]"),
-          ("[", "]"), ("(", ")"), ("{", "}"), (">", "]")]
-AFTER_CLOSE = re.compile(r"(?:\s|$|[-;&:=.])")  # สิ่งที่ตามหลังโหนดได้ เช่น ช่องว่าง ลูกศร ; & :::class
-EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")  # ข้อความบนเส้น -->|...| ซึ่งวงเล็บ วงเล็บเหลี่ยม ปีกกา และเครื่องหมายคำพูดก็ทำให้พังเช่นกัน เว้นแต่ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ
-EDGE_BREAKERS = re.compile(r"[()\[\]{}\"]")
+NODE_ID = re.compile(r"[A-Za-z0-9_฀-๿]+\s*")
+THAI = re.compile(r"[฀-๿]")
+# ตัวเปิดของแต่ละรูปทรง เรียงยาวก่อนสั้น และตัวปิดที่เป็นไปได้ (สี่เหลี่ยมคางหมูใช้ [/ กับ \] หรือ [\ กับ /] ได้)
+SHAPES = [("(((", [")))"]), ("([", ["])"]), ("[(", [")]"]), ("[[", ["]]"]), ("((", ["))"]), ("{{", ["}}"]),
+          ("[/", ["/]", "\\]"]), ("[\\", ["\\]", "/]"]), ("[", ["]"]), ("(", [")"]), ("{", ["}"]), (">", ["]"])]
+AFTER_CLOSE = re.compile(r"(?:\s|$|[-;&:=.~<])")  # สิ่งที่ตามหลังโหนดได้ เช่น ช่องว่าง ลูกศร ; & :::class ~~~ <-->
+EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")  # ข้อความบนเส้น -->|...| ใช้กฎเดียวกับโหนด เว้นแต่ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ
+EDGE_TEXT = re.compile(r"(--|-\.|==)\s*[^-=.|\n]*?\s*(-->|---|\.->|==>|\.-)")  # ข้อความบนเส้นแบบ A -- ข้อความ --> B
+FLOW_KEYWORDS = ("subgraph", "end", "direction", "classdef", "class ", "style ", "linkstyle", "click ")
+
+
+def mermaid_body(code):
+    """บรรทัดของผัง ไม่รวม frontmatter --- ... --- ที่หัวผัง และคอมเมนต์ %%"""
+    lines = code.splitlines()
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i < len(lines) and lines[i].strip() == "---":
+        j = i + 1
+        while j < len(lines) and lines[j].strip() != "---":
+            j += 1
+        i = j + 1
+    return [(k, l) for k, l in enumerate(lines) if k >= i]
 
 
 def node_labels(line):
-    """คืนข้อความในโหนดทุกตัวของบรรทัด โดยจับคู่ตัวเปิดกับตัวปิดตามรูปทรง ข้อความที่ครอบเครื่องหมายคำพูดถูกแทนด้วย \"\" ก่อน"""
+    """คืน (ข้อความในโหนด, ตำแหน่งเริ่ม, ตำแหน่งจบ) ทุกตัวของบรรทัด โดยจับคู่ตัวเปิดกับตัวปิดตามรูปทรง ข้อความที่ครอบเครื่องหมายคำพูดถูกแทนด้วย "" ก่อน"""
     line = QUOTED.sub('""', line)
     out = []
     pos = 0
@@ -218,44 +235,68 @@ def node_labels(line):
         if not opener:
             pos = m.end() if m.end() > pos else pos + 1
             continue
-        closer = dict(SHAPES)[opener]
         body_start = m.end() + len(opener)
-        search = body_start
         found = -1
-        while True:
-            k = line.find(closer, search)
-            if k < 0:
-                break
-            if AFTER_CLOSE.match(line, k + len(closer)):
-                found = k
-                break
-            search = k + 1
+        found_closer = ""
+        for closer in dict(SHAPES)[opener]:
+            search = body_start
+            while True:
+                k = line.find(closer, search)
+                if k < 0:
+                    break
+                if AFTER_CLOSE.match(line, k + len(closer)):
+                    if found < 0 or k < found:
+                        found, found_closer = k, closer
+                    break
+                search = k + 1
         if found < 0:
             pos = body_start
             continue
-        out.append(line[body_start:found])
-        pos = found + len(closer)
-    return out
+        out.append((line[body_start:found], body_start, found + len(found_closer)))
+        pos = found + len(found_closer)
+    return out, line
 
 
 def check_mermaid_labels(d, start, code):
-    first = next((l.strip() for l in code.splitlines() if l.strip() and not l.strip().startswith("%%")), "").lower()
+    body = mermaid_body(code)
+    first = next((l.strip() for _, l in body if l.strip() and not l.strip().startswith("%%")), "").lower()
     if not (first.startswith("flowchart") or first.startswith("graph")):
         return
-    for k, line in enumerate(code.splitlines()):
-        for m in EDGE_LABEL.finditer(QUOTED.sub('""', line)):
+    for k, line in body:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("%%"):
+            continue
+        if "%%" in QUOTED.sub('""', line):
+            warn(d.rel, start + 1 + k, "คอมเมนต์ %% ของผัง Mermaid ต้องอยู่บรรทัดของตัวเอง ต่อท้ายบรรทัดอื่นไม่ได้")
+            break
+        masked = QUOTED.sub('""', line)
+        for m in EDGE_LABEL.finditer(masked):
             t = m.group(1).strip()
             if t and t != '""' and EDGE_BREAKERS.search(t):
-                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นของผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ เช่น -->|\"ใช่ (ต่อ)\"|: {QUOTED.sub(chr(34)+chr(34), t)[:40]}")
+                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นของผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ เช่น -->|\"ใช่ (ต่อ)\"|: {t[:40]}")
                 break
-        for t in node_labels(line):
+        labels, masked = node_labels(line)
+        warned = False
+        for t, _, _ in labels:
             t = re.sub(r"<br\s*/?>", " ", t).strip()  # <br/> คือการขึ้นบรรทัดใหม่ของ Mermaid ใช้ได้โดยไม่ต้องครอบ
             if not t or t == '""':
                 continue  # ว่าง หรือครอบเครื่องหมายคำพูดทั้งข้อความแล้ว
             if LABEL_BREAKERS.search(t):
-                shown = QUOTED.sub("", t)[:40]
-                warn(d.rel, start + 1 + k, f"ข้อความในผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ (เครื่องหมายคำพูดภายในใช้ #quot;): {shown}")
+                warn(d.rel, start + 1 + k, f"ข้อความในผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ (เครื่องหมายคำพูดภายในใช้ #quot;): {t[:40]}")
+                warned = True
                 break
+        if warned or first.startswith("graph") and stripped.lower().startswith("graph") or stripped.lower().startswith("flowchart"):
+            continue
+        # รหัสโหนด รหัส subgraph และคำสั่ง ต้องเป็นอักษรละติน Mermaid ไม่รับรหัสภาษาไทย ชื่อไทยต้องอยู่ในข้อความของโหนด
+        outside = masked
+        for _, a, b in sorted(labels, key=lambda x: -x[1]):
+            outside = outside[:a] + outside[b:]
+        outside = EDGE_LABEL.sub("||", outside)
+        outside = EDGE_TEXT.sub(r"\1 \2", outside)
+        if stripped.lower().startswith(("subgraph", "class ", "classdef", "style ", "linkstyle", "click ")):
+            outside = outside.split("[", 1)[0] if stripped.lower().startswith("subgraph") else outside
+        if THAI.search(outside):
+            warn(d.rel, start + 1 + k, f"รหัสโหนดหรือชื่อ subgraph ในผัง flowchart เป็นภาษาไทย Mermaid วาดไม่ได้ ให้ใช้รหัสละตินแล้วใส่ชื่อไทยในข้อความ เช่น A[เริ่ม] หรือ subgraph S1[ชื่อ]: {stripped[:40]}")
 
 
 def check_fences(docs):
@@ -266,7 +307,7 @@ def check_fences(docs):
         if d.fence_count % 2 != 0:
             err(d.rel, 0, "บล็อกโค้ด (```) เปิดปิดไม่ครบคู่")
         for start, code in d.mermaid:
-            first = next((l.strip() for l in code.splitlines() if l.strip() and not l.strip().startswith("%%")), "")
+            first = next((l.strip() for _, l in mermaid_body(code) if l.strip() and not l.strip().startswith("%%")), "")
             if not first:
                 err(d.rel, start, "ผัง Mermaid ว่างเปล่า")
             elif not first.lower().replace(" ", "").startswith(known):

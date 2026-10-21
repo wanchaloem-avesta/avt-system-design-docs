@@ -77,8 +77,8 @@ def main():
         find = e.get("find", "")
         repl = e.get("replace")
         target = e.get("file", "")
-        if not find or repl is None or not target:
-            problems.append(f"รายการที่ {n}: ต้องมี file, find และ replace")
+        if not isinstance(find, str) or not isinstance(repl, str) or not isinstance(target, str) or not find or not target:
+            problems.append(f"รายการที่ {n}: ต้องมี file, find และ replace เป็นข้อความ และ find กับ file ต้องไม่ว่าง")
             continue
         if target == "*":
             paths = all_docs(root)
