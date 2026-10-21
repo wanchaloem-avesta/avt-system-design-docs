@@ -6,6 +6,8 @@
 
 --render  ลองวาดผัง Mermaid ทุกผังด้วย Chrome หรือ Edge ในเครื่อง (ต้องมีอินเทอร์เน็ต)
 
+สคริปต์รู้จักไฟล์จากคำในชื่อไฟล์: flows, decisions, screens, api, data-model ชุดเอกสารต้องใช้ชื่อเหล่านี้
+
 รหัสออก: 0 = ไม่มีรายการระดับผิดพลาด, 1 = มีรายการระดับผิดพลาด, 2 = เรียกใช้ผิด
 """
 import html
@@ -153,6 +155,26 @@ def check_numbering(root):
             err("docs/", 0, f"เลขนำหน้าไฟล์ข้ามจาก {a:02d} ไป {b:02d}")
 
 
+# ข้อความใน [] () {} ของ flowchart ที่มีวงเล็บ ทับ หรือโคลอน แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูด จะทำให้ผังวาดไม่ได้
+LABEL = re.compile(r"[A-Za-z0-9_\u0E00-\u0E7F]+\s*(\[\[?|\(\(?|\{\{?|>)\s*(\"[^\"\n]*\"|[^\]\)\}\n\"]*?)\s*(\]\]?|\)\)?|\}\}?)")
+EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")
+
+
+def check_mermaid_labels(d, start, code):
+    first = next((l.strip() for l in code.splitlines() if l.strip() and not l.strip().startswith("%%")), "").lower()
+    if not (first.startswith("flowchart") or first.startswith("graph")):
+        return
+    for k, line in enumerate(code.splitlines()):
+        texts = [m.group(2) for m in LABEL.finditer(line)] + [m.group(1) for m in EDGE_LABEL.finditer(line)]
+        for t in texts:
+            t = t.strip()
+            if not t or (t.startswith('"') and t.endswith('"')):
+                continue
+            if re.search(r"[()/:]", t):
+                warn(d.rel, start + 1 + k, f"ข้อความในผัง Mermaid มีวงเล็บ ทับ หรือโคลอน แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูด: {t[:40]}")
+                break
+
+
 def check_fences(docs):
     known = ("flowchart", "graph", "sequencediagram", "statediagram", "erdiagram", "classdiagram",
              "gantt", "journey", "pie", "mindmap", "timeline", "quadrantchart", "gitgraph",
@@ -166,6 +188,8 @@ def check_fences(docs):
                 err(d.rel, start, "ผัง Mermaid ว่างเปล่า")
             elif not first.lower().replace(" ", "").startswith(known):
                 warn(d.rel, start, f"บรรทัดแรกของผัง Mermaid ไม่ใช่ชนิดผังที่รู้จัก: {first[:40]}")
+            else:
+                check_mermaid_labels(d, start, code)
 
 
 FILE_TOKEN = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.md)(?![\w-])")
@@ -211,25 +235,57 @@ def check_file_refs(root, docs):
                     err(d.rel, i, f"ลิงก์ชี้ไปยังไฟล์ที่ไม่มีอยู่: {target}")
 
 
-SECTION_REF = re.compile(r"((?:[\w.-]+/)*\d\d-[a-z0-9-]+\.md)`?\s+(?:ข้อ|หัวข้อที่|section|Section)\s+")
-NUMBER = re.compile(r"(\d+(?:\.\d+)*)(?![\d.]*-)")
-SEP = re.compile(r"\s*(?:,|และ|ถึง|and|to|-|–)\s*")
+SECTION_REF = re.compile(r"((?:[\w.-]+/)*\d\d-[a-z0-9-]+\.md)`?\s+(?:ข้อ|หัวข้อ|หัวข้อที่|section|Section)\s+")
+# เลขที่ตามด้วยขีดและตัวอักษร เช่น 03-flows.md เป็นชื่อไฟล์ ไม่ใช่เลขข้อ
+NUMBER = re.compile(r"(\d+(?:\.\d+)*)(?![\d.]*-[A-Za-z])")
+SEP = re.compile(r"\s*(,|และ|and)\s*")
+RANGE = re.compile(r"\s*(?:-|–|ถึง|to)\s*")
+
+
+def expand_range(a, b):
+    """ขยายช่วงเลข เช่น 4-6 → 4,5,6 และ 2.1-2.3 → 2.1,2.2,2.3 ถ้าช่วงยาวเกินหรือรูปแบบไม่ตรงกัน คืนเฉพาะปลายทั้งสอง"""
+    pa, pb = a.split("."), b.split(".")
+    if len(pa) != len(pb) or pa[:-1] != pb[:-1]:
+        return [a, b]
+    lo, hi = int(pa[-1]), int(pb[-1])
+    if lo > hi or hi - lo > 50:
+        return [a, b]
+    prefix = ".".join(pa[:-1])
+    return [(prefix + "." if prefix else "") + str(n) for n in range(lo, hi + 1)]
+
+
+def ends_phrase(text, pos):
+    """เลขที่ตำแหน่ง pos จบวลีหรือไม่ คือตามด้วยจบบรรทัด เครื่องหมายวรรคตอน หรือตัวคั่นเลขถัดไป"""
+    return re.match(r"\s*(?:$|[,;:()\]}.]|และ|and\b|ถึง|to\b|[-–](?=\s*\d))", text[pos:]) is not None
 
 
 def parse_numbers(text):
-    """อ่านเลขหัวข้อที่ตามหลังคำว่า ข้อ เช่น '3, 4 และ 6' หรือ '1 ถึง 3'"""
+    """อ่านเลขหัวข้อที่ตามหลังคำว่า ข้อ, Flow, ประเด็นที่ เช่น '3, 4 และ 6' หรือ '1 ถึง 3' หรือ '4-6'
+
+    เลขแรกนับเสมอ เลขหลังจุลภาคหรือในช่วง (ถึง, ขีด) นับเสมอ เพราะเป็นสัญญาณชัดว่าเป็นเลขข้อ
+    เลขหลังคำว่า "และ" นับต่อเมื่อเลขนั้นจบวลี เพื่อไม่ให้ "ข้อ 1.1 และ 3 บทบาท" ถูกอ่านว่าอ้างข้อ 3
+    ข้อแลกคือ "ข้อ 4 และ 6 ซึ่ง..." จะตรวจเฉพาะข้อ 4 ให้เขียนหลายข้อด้วยจุลภาค เช่น "ข้อ 4, 6" เพื่อให้ตรวจครบ
+    """
     out = []
-    pos = 0
-    while True:
-        m = NUMBER.match(text, pos)
+    m = NUMBER.match(text)
+    while m:
+        n = m.group(1)
+        pos = m.end()
+        r = RANGE.match(text, pos)
+        if r and NUMBER.match(text, r.end()):
+            m2 = NUMBER.match(text, r.end())
+            out.extend(expand_range(n, m2.group(1)))
+            pos = m2.end()
+        else:
+            out.append(n)
+        sep = SEP.match(text, pos)
+        if not sep:
+            break
+        m = NUMBER.match(text, sep.end())
         if not m:
             break
-        out.append(m.group(1).rstrip("."))
-        pos = m.end()
-        s = SEP.match(text, pos)
-        if not s:
+        if sep.group(1) != "," and not ends_phrase(text, m.end()):
             break
-        pos = s.end()
     return out
 
 
@@ -240,12 +296,21 @@ def check_section_refs(root, docs):
     flows = [d for d in docs if "flow" in d.path.name.lower()]
     decisions = [d for d in docs if "decision" in d.path.name.lower()]
     flow_nums = set()
+    flow_where = {}
     for d in flows:
-        for _, _, text in d.headings:
-            flow_nums.update(re.findall(r"\bFlow\s+(\d+)", text))
+        for line_no, _, text in d.headings:
+            for n in re.findall(r"^Flow\s+(\d+)\b", text):
+                if n in flow_where:
+                    err(d.rel, line_no, f"หัวข้อ Flow {n} ซ้ำกับ {flow_where[n]} เลข Flow ต้องไม่ซ้ำกันแม้แยกหลายไฟล์")
+                flow_where.setdefault(n, f"{d.rel}:{line_no}")
+                flow_nums.add(n)
     decision_nums = set()
     for d in decisions:
         decision_nums |= d.heading_numbers()
+    if not flows:
+        err("docs/", 0, "ไม่พบไฟล์ลำดับการทำงาน (ชื่อไฟล์ต้องมีคำว่า flows) จึงตรวจการอ้าง Flow ไม่ได้")
+    if not decisions:
+        err("docs/", 0, "ไม่พบไฟล์ประเด็นตัดสินใจ (ชื่อไฟล์ต้องมีคำว่า decisions) จึงตรวจการอ้างประเด็นไม่ได้")
 
     for d in docs:
         for i, line in d.prose_lines():
@@ -258,13 +323,15 @@ def check_section_refs(root, docs):
                     if n not in have:
                         err(d.rel, i, f"อ้างถึง {target.path.name} ข้อ {n} แต่ไฟล์นั้นไม่มีหัวข้อเลข {n}")
             if flows:
-                for n in re.findall(r"\bFlow\s+(\d+)", line):
-                    if n not in flow_nums:
-                        err(d.rel, i, f"อ้างถึง Flow {n} แต่ไฟล์ลำดับการทำงานไม่มีหัวข้อ Flow {n}")
+                for m in re.finditer(r"\bFlow\s+(?=\d)", line):
+                    for n in parse_numbers(line[m.end():m.end() + 60]):
+                        if n not in flow_nums:
+                            err(d.rel, i, f"อ้างถึง Flow {n} แต่ไฟล์ลำดับการทำงานไม่มีหัวข้อ Flow {n}")
             if decisions:
-                for n in re.findall(r"ประเด็นที่\s+(\d+)", line):
-                    if n not in decision_nums:
-                        err(d.rel, i, f"อ้างถึงประเด็นที่ {n} แต่ไฟล์ประเด็นตัดสินใจไม่มีหัวข้อเลข {n}")
+                for m in re.finditer(r"ประเด็นที่\s+(?=\d)", line):
+                    for n in parse_numbers(line[m.end():m.end() + 60]):
+                        if n not in decision_nums:
+                            err(d.rel, i, f"อ้างถึงประเด็นที่ {n} แต่ไฟล์ประเด็นตัดสินใจไม่มีหัวข้อเลข {n}")
 
 
 def check_readme_lists_files(root, docs):
@@ -332,19 +399,21 @@ def check_empty_sections(docs):
             warn(d.rel, line_no, f"หัวข้อไม่มีเนื้อหา: {text}")
 
 
-PENDING_MARK = re.compile(r"\([^()\n]*รอยืนยัน\)")  # (รอยืนยัน) หรือ (จำนวนรูปรอยืนยัน) ไม่รวมชื่อสถานะเช่น รอยืนยันผล
+# (รอยืนยัน) หรือ (จำนวนรูปรอยืนยัน) ไม่รวมชื่อสถานะเช่น รอยืนยันผล และโหมดกลับด้าน (ลูกค้ากำหนด)
+PENDING_MARK = re.compile(r"\([^()\n]*รอยืนยัน\)|\(ลูกค้ากำหนด\)")
 
 
 def check_pending_marks(docs):
     decisions = [d for d in docs if "decision" in d.path.name.lower()]
     marked = [d for d in docs if PENDING_MARK.search(d.text) and d.rel != "README.md" and d not in decisions]
     if marked and not decisions:
-        warn("docs/", 0, "มีข้อความ \"รอยืนยัน\" ในเอกสาร แต่ไม่พบไฟล์ประเด็นตัดสินใจ (ชื่อไฟล์ที่มีคำว่า decisions)")
-        return
+        return  # รายงานไว้แล้วว่าไม่พบไฟล์ประเด็นตัดสินใจ
     names = [d.path.name for d in decisions]
     for d in marked:
         if not any(n in d.text for n in names) and "ประเด็นที่" not in d.text:
-            warn(d.rel, 0, "ไฟล์นี้มีเครื่องหมาย \"รอยืนยัน\" แต่ไม่ได้ชี้ไปที่ไฟล์ประเด็นตัดสินใจหรือเลขประเด็น ผู้อ่านจะหารายละเอียดไม่เจอ")
+            warn(d.rel, 0, "ไฟล์นี้มีเครื่องหมาย (รอยืนยัน) หรือ (ลูกค้ากำหนด) แต่ไม่ได้ชี้ไปที่ไฟล์ประเด็นตัดสินใจหรือเลขประเด็น ผู้อ่านจะหารายละเอียดไม่เจอ")
+        if "(ลูกค้ากำหนด)" in d.text and PENDING_MARK.search(d.text.replace("(ลูกค้ากำหนด)", "")):
+            warn(d.rel, 0, "ไฟล์นี้ใช้ทั้ง (รอยืนยัน) และ (ลูกค้ากำหนด) ให้เลือกแบบเดียวต่อไฟล์")
 
 
 ROW = re.compile(r"^\s*\|(.+)\|\s*$")
@@ -490,7 +559,8 @@ def render_mermaid(docs):
         shutil.rmtree(tmp, ignore_errors=True)
     m = re.search(r'<div id="result">(.*?)</div>', dom, re.S)
     if not m:
-        notes.append("ข้ามการวาดผัง Mermaid: เบราว์เซอร์ไม่ส่งผลกลับ อาจไม่มีอินเทอร์เน็ต")
+        notes.append("ข้ามการวาดผัง Mermaid: เบราว์เซอร์ไม่ส่งผลกลับ สาเหตุที่พบบ่อยคือไม่มีอินเทอร์เน็ต หรือ proxy ขององค์กรกันการโหลด cdn.jsdelivr.net "
+                     "ให้ตรวจผังด้วยคำเตือนเรื่องเครื่องหมายคำพูดข้างต้น และเปิดดูในโปรแกรมที่แสดง Mermaid ได้แทน")
         return
     result = html.unescape(m.group(1))
     if result == "NOLIB":

@@ -19,6 +19,8 @@
 รายการถูกทำตามลำดับ รายการหลังเห็นผลของรายการก่อน
 --dry-run แสดงว่าจะแก้อะไรโดยไม่เขียนไฟล์
 
+ไฟล์รายการแก้เป็นไฟล์ชั่วคราว ให้วางไว้นอกโฟลเดอร์โครงการ เช่น โฟลเดอร์ชั่วคราวของระบบ เพื่อไม่ให้ติดไปกับชุดเอกสาร
+
 รหัสออก: 0 = สำเร็จ, 1 = มีรายการที่ไม่ตรง ไม่ได้เขียนไฟล์, 2 = เรียกใช้ผิด
 """
 import json
@@ -98,15 +100,16 @@ def main():
         for p, c in hits.items():
             if c:
                 content[p] = content[p].replace(find, repl)
-                report.append(f"รายการที่ {n}: {p.relative_to(root).as_posix()} แก้ {c} จุด  \"{label}\"")
+                report.append(f"รายการที่ {n}: {p.relative_to(root).as_posix()} {c} จุด  \"{label}\"")
 
-    for line in report:
-        print(line)
     if problems:
-        print("\nไม่ได้เขียนไฟล์ใด เพราะมีรายการที่ไม่ตรง")
+        print("ไม่ได้เขียนไฟล์ใด เพราะมีรายการที่ไม่ตรง")
         for line in problems:
             print("  " + line)
         return 1
+    print("จุดที่จะแก้" if "--dry-run" in flags else "จุดที่แก้")
+    for line in report:
+        print("  " + line)
     if "--dry-run" in flags:
         print("\nทดลองเท่านั้น ไม่ได้เขียนไฟล์")
         return 0
