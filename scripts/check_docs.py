@@ -380,14 +380,19 @@ def check_mermaid_labels(d, start, code):
             if line.count('"') % 2 == 0:
                 continue
             in_quote = -1
-            prefix = {"node": 'Q["Q', "edge": 'Q -->|"Q', "text": 'Q -- "Q'}[quote_kind]
-            line = prefix + line[line.index('"'):]  # ตรวจเฉพาะส่วนหลังเครื่องหมายคำพูดปิดของข้อความหลายบรรทัด
+            qi = line.index('"')
+            if quote_kind == "node":
+                closer = re.match(r"\"[\])}/\\]*", line[qi:]).group(0)  # เครื่องหมายคำพูดปิดและตัวปิดรูปทรงทุกแบบ
+                line = "Q" + line[qi + len(closer):]
+            else:
+                prefix = {"edge": 'Q -->|"Q', "text": 'Q -- "Q'}[quote_kind]
+                line = prefix + line[qi:]  # ตรวจเฉพาะส่วนหลังเครื่องหมายคำพูดปิดของข้อความหลายบรรทัด
             stripped = line.strip()
         if not stripped or stripped.startswith("%%") or stripped.lower().startswith(("acctitle", "accdescr")):
             continue
         if line.count('"') % 2 == 1:
             # เครื่องหมายคำพูดเดี่ยวเป็นการเปิดข้อความหลายบรรทัดได้เฉพาะเมื่ออยู่ติดตัวเปิดรูปทรงหรือป้ายเส้น และไม่มีอะไรตามหลังที่ปิด
-            om = re.search(r"([\[({>|]|--|-\.|==)\s*\"[^\"]*$", line)
+            om = re.search(r"([\[({>|/\\]|--|-\.|==)\s*\"[^\"]*$", line)
             if om:
                 in_quote = k
                 quote_kind = "edge" if om.group(1) == "|" else "text" if om.group(1) in ("--", "-.", "==") else "node"
@@ -396,6 +401,12 @@ def check_mermaid_labels(d, start, code):
             continue
         if "%%" in mask_quotes(line):
             warn(d.rel, start + 1 + k, "คอมเมนต์ %% ของผัง Mermaid ต้องอยู่บรรทัดของตัวเอง เมื่อต่อท้ายบรรทัดอื่น Mermaid 11 มักวาดไม่ได้ ให้ย้ายไปบรรทัดใหม่")
+            continue
+        if re.match(r"^linkStyle\s", stripped) and re.search(r"#[0-9A-Fa-f]{3,8}\s*;\s*$", stripped):
+            warn(d.rel, start + 1 + k, f"บรรทัด linkStyle ที่ลงท้ายด้วยสีฐานสิบหกแล้วตามด้วย ; Mermaid 11 วาดไม่ได้ ให้ตัด ; ออก: {stripped[:40]}")
+            continue
+        if re.search(r"[\])}]\s+:::", stripped) or (re.match(r"^subgraph\s", stripped) and ":::" in stripped):
+            warn(d.rel, start + 1 + k, f":::ชื่อclass ต้องติดกับตัวปิดรูปทรงโดยไม่มีช่องว่าง และใช้กับ subgraph ไม่ได้: {stripped[:40]}")
             continue
         if re.match(r"^click\s", stripped):
             if line != line.rstrip():
@@ -474,7 +485,14 @@ def check_mermaid_labels(d, start, code):
                 warn(d.rel, start + 1 + k, f"ข้อความโหนดที่ขึ้นต้นด้วย / หรือ \\ ต้องครอบด้วยเครื่องหมายคำพูด เพราะ Mermaid อ่านเป็นรูปทรง เช่น A[\"/api/v1\"]: {t[:40]}")
                 warned = True
                 break
-            if t == '"Q"' and raw_first == " " and opener not in ("[/", "[\\"):
+            if t == '"Q"' and raw_first == " " and opener in ("[/", "[\\"):
+                qm = re.search(r"\[[/\\]\s+\"([^\"\n]*)\"", line)
+                if qm and re.search(r"[()\[\]{}]", qm.group(1)):
+                    warn(d.rel, start + 1 + k, f"สี่เหลี่ยมคางหมูที่มีช่องว่างก่อนเครื่องหมายคำพูด Mermaid ไม่ถือว่าครอบ ข้อความจึงมีวงเล็บไม่ได้ ให้ลบช่องว่างออก เช่น A[/\"ข้อความ (x)\"/]: {qm.group(1)[:40]}")
+                    warned = True
+                    break
+                continue
+            if t == '"Q"' and raw_first == " ":
                 warn(d.rel, start + 1 + k, "เครื่องหมายคำพูดของข้อความโหนดต้องติดกับตัวเปิดรูปทรง ไม่มีช่องว่างนำหน้า เช่น A[\"ข้อความ\"]")
                 warned = True
                 break
