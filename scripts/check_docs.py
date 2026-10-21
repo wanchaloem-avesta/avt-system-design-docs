@@ -209,7 +209,7 @@ EDGE_TEXT = re.compile(r"(--|-\.|==)(?![>.=-]?>)[^|\n]*?(-{2,}>|-{3,}|--[ox]|={2
 SHAPE_SPEC = re.compile(r"@\{[^}\n]*\}")  # A@{ shape: rect, label: ... } ข้อความใน label ใช้เครื่องหมายคำพูดเดี่ยวหรือไม่ครอบก็ได้
 # คำสงวนของ flowchart ที่ใช้เป็นรหัสโหนดไม่ได้ (แยกตัวพิมพ์ Class หรือ END ใช้ได้)
 RESERVED = re.compile(r"(?<![A-Za-z0-9_-])(?<![A-Za-z0-9_]-)(end|class|style|click|href|call|interpolate|linkStyle|classDef|subgraph|flowchart|graph)(?![A-Za-z0-9_])")  # end-user ก็ไม่ได้ แต่ x-end ได้
-LEADING_COMMAND = re.compile(r"^\s*(class|style|click|linkStyle|classDef|subgraph|direction|end)(?![A-Za-z0-9_])")
+LEADING_COMMAND = re.compile(r"^\s*(?:(?:class|style|click|linkStyle|classDef|subgraph|direction)(?![A-Za-z0-9_-])|end\s*$)")  # end เป็นคำสั่งเฉพาะเมื่ออยู่เดี่ยว ๆ
 ER_ENTITY = r"[A-Za-z0-9_-]+"
 ER_REL_LINE = re.compile(r"^\s*(\S+)\s+[|}o{]+(?:--|\.\.)[|}o{]+\s+(\S+)\s*(?::\s*(.*?))?\s*$")  # USER ||--o{ ORDER : label
 # ป้ายที่ไม่ครอบเครื่องหมายคำพูดต้องเป็นคำเดียว ขึ้นต้นด้วยตัวอักษร มีได้แค่ตัวอักษร ตัวเลข _ - . และไม่ใช่คำสงวน one many to (ยืนยันกับ mermaid@11)
