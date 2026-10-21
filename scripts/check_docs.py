@@ -242,7 +242,7 @@ def check_file_refs(root, docs):
         if is_source_doc(d) or d.rel == "README.md":
             continue  # README ตรวจแยกใน check_readme_lists_files รวมบล็อกโค้ด
         for i, line in d.prose_lines():
-            for m in FILE_TOKEN.finditer(line):
+            for m in FILE_TOKEN.finditer(MD_LINK.sub("]()", line)):  # ปลายทางของลิงก์ตรวจแยกด้านล่าง ไม่รายงานซ้ำ
                 tok = m.group(1)
                 if any(c in tok for c in "<>*{}"):
                     continue
@@ -258,8 +258,10 @@ def check_file_refs(root, docs):
                     err(d.rel, i, f"ลิงก์ชี้ไปยังไฟล์ที่ไม่มีอยู่: {target}")
 
 
-SECTION_REF = re.compile(r"((?:[A-Za-z0-9_.-]+/)*\d\d-[a-z0-9-]+\.md)`?\s+(?:ข้อ|หัวข้อ|หัวข้อที่|section|Section)\s+")
-DECISION_REF = re.compile(r"(?:ประเด็นที่|(?<![A-Za-z0-9_])Decision)\s+(?=\d)")
+# ยอมให้ชื่อไฟล์ถูกคร่อมด้วย ` ** " หรือเป็นลิงก์ [ชื่อ](ชื่อ) ก่อนคำว่า ข้อ
+SECTION_REF = re.compile(r"((?:[A-Za-z0-9_.-]+/)*\d\d-[a-z0-9-]+\.md)(?:\]\([^)\s]*\))?[`*\"]*\s+(?:ข้อ|หัวข้อ|หัวข้อที่|section)\s+", re.IGNORECASE)
+DECISION_REF = re.compile(r"(?:ประเด็นที่|(?<![A-Za-z0-9_])Decision)\s+(?=\d)", re.IGNORECASE)
+CLOSE_LINE = re.compile(r"^\*\*[^*\n]*(?:ประเด็นที่ต้องปิด|Decisions to close)[^*\n]*:\*\*\s*(.*)$", re.IGNORECASE)
 FLOW_WORD = r"(?<![A-Za-z0-9_])Flow"
 # เลขที่ตามด้วยขีดและตัวอักษร เช่น 03-flows.md เป็นชื่อไฟล์ ไม่ใช่เลขข้อ
 NUMBER = re.compile(r"(\d+(?:\.\d+)*)(?![\d.]*-[A-Za-z])")
@@ -375,9 +377,11 @@ def check_readme_lists_files(root, docs):
     # ชื่อไฟล์ที่ README กล่าวถึง รวมในแผนผังต้นไม้ที่อยู่ในบล็อกโค้ด ต้องมีจริง
     source_names = customer_file_names(docs)
     for i, line in enumerate(readme.lines, 1):
-        for m in FILE_TOKEN.finditer(line):
+        for m in FILE_TOKEN.finditer(MD_LINK.sub("]()", line)):
             tok = m.group(1)
-            if any(c in tok for c in "<>*{}") or Path(tok).name in source_names:
+            if any(c in tok for c in "<>*{}"):
+                continue
+            if Path(tok).name in source_names and not re.match(r"^(docs|plans)/", tok):
                 continue
             if not resolve(root, readme, tok):
                 err("README.md", i, f"README กล่าวถึงไฟล์ที่ไม่มีอยู่: {tok}")
@@ -499,7 +503,7 @@ def check_decision_summary(docs):
             err(d.rel, 0, f"ตารางสรุปประเด็นมีประเด็นที่ {n} แต่ไม่มีหัวข้อของประเด็นนั้น")
         # บรรทัด "ประเด็นที่ต้องปิดก่อน...: 1, 9" เลขต้องมีหัวข้อจริง
         for i, line in d.prose_lines():
-            m = re.match(r"^\*\*[^*\n]*(?:ประเด็นที่ต้องปิด|Decisions to close)[^*\n]*:\*\*\s*(.*)$", line.strip())
+            m = CLOSE_LINE.match(line.strip())
             if m:
                 for n in parse_numbers(m.group(1)):
                     if n not in heading_nums:
