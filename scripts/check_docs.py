@@ -43,7 +43,8 @@ def warn(f, line, msg):
 
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
-NUM_TOKEN = re.compile(r"^(\d+(?:\.\d+)*)\.?(?=\s|$|:)")
+# เลขหัวข้อ รองรับทั้ง "## 3. ชื่อ" และ "## ประเด็นที่ 3: ชื่อ" / "## Decision 3: ..."
+NUM_TOKEN = re.compile(r"^(?:(?:ประเด็นที่|ข้อที่|ข้อ|Decision|Section)\s+)?(\d+(?:\.\d+)*)\.?(?=\s|$|:)", re.IGNORECASE)
 LIST_NUM = re.compile(r"^\s*[-*]\s+(\d+(?:\.\d+)+)\s")
 
 
@@ -412,10 +413,10 @@ def check_mermaid_labels(d, start, code):
             warn(d.rel, start + 1 + k, "คอมเมนต์ %% ของผัง Mermaid ต้องอยู่บรรทัดของตัวเอง เมื่อต่อท้ายบรรทัดอื่น Mermaid 11 มักวาดไม่ได้ ให้ย้ายไปบรรทัดใหม่")
             continue
         if re.match(r"^(?:linkStyle|style|classDef)\s", stripped):
-            if re.search(r"#[0-9A-Fa-f]{3,8};\s*$", stripped) or re.search(r";\s*\S", stripped):
-                warn(d.rel, start + 1 + k, f"บรรทัด style classDef linkStyle คั่นค่าด้วยจุลภาค ไม่ใช่ ; และห้ามมี ; ติดท้ายสีฐานสิบหก: {stripped[:40]}")
+            if (stripped.startswith("linkStyle") and re.search(r"#[0-9A-Fa-f]{3,8};\s*$", stripped)) or re.search(r";\s*\S", stripped):
+                warn(d.rel, start + 1 + k, f"บรรทัด style classDef linkStyle คั่นค่าด้วยจุลภาค ไม่ใช่ ; และ linkStyle ห้ามมี ; ติดท้ายสีฐานสิบหก: {stripped[:40]}")
                 continue
-            if re.search(r"\b(?:rgb|rgba|hsl)\(", stripped):
+            if re.search(r"\b(?:rgb|hsl)a?\(", stripped, re.IGNORECASE):
                 warn(d.rel, start + 1 + k, f"สีในผัง Mermaid ใช้รูป #hex หรือชื่อสี ไม่ใช้ rgb() หรือ hsl(): {stripped[:40]}")
                 continue
         if re.search(r"(?:[\])}]|[A-Za-z0-9_])\s+:::", stripped) or re.search(r":::\s", stripped) or (re.match(r"^subgraph\s", stripped) and ":::" in stripped):
@@ -494,7 +495,7 @@ def check_mermaid_labels(d, start, code):
                 warn(d.rel, start + 1 + k, "ข้อความโหนดในผัง Mermaid เป็นเครื่องหมายคำพูดว่าง Mermaid ไม่รับ ให้ใส่ข้อความ")
                 warned = True
                 break
-            if opener in ("(", "((") and t[:1] == "-":
+            if opener in ("(", "((") and raw_first == "-":
                 warn(d.rel, start + 1 + k, f"ข้อความในวงเล็บกลมที่ขึ้นต้นด้วย - ต้องครอบด้วยเครื่องหมายคำพูด เพราะ Mermaid อ่าน (- เป็นรูปทรง: {t[:40]}")
                 warned = True
                 break
