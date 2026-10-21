@@ -422,7 +422,7 @@ def check_mermaid_labels(d, start, code):
         if re.search(r"(?:[\])}]|[A-Za-z0-9_])\s+:::", stripped) or re.search(r":::\s", stripped) or (re.match(r"^subgraph\s", stripped) and ":::" in stripped):
             warn(d.rel, start + 1 + k, f":::ชื่อclass ต้องติดกับตัวปิดรูปทรงโดยไม่มีช่องว่าง และใช้กับ subgraph ไม่ได้: {stripped[:40]}")
             continue
-        if re.match(r"^click\s", stripped):
+        if re.match(r"^click\s(?!\s*(?:-->|---|-\.|==|--[ox]|<-|[\[({>]|&|:::|~~~|\|))", stripped):  # click เป็นคำสั่งเฉพาะเมื่อตามด้วยรหัสโหนด ไม่ใช่ลูกศร
             if line != line.rstrip():
                 warn(d.rel, start + 1 + k, f"บรรทัด click มีช่องว่างท้ายบรรทัด Mermaid 11 วาดไม่ได้ ให้ลบออก: {stripped[:40]}")
             continue  # click A href "url" และ click A call fn() เป็นไวยากรณ์ของ click เอง ไม่ใช่โหนด
