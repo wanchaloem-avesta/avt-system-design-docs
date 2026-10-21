@@ -64,8 +64,12 @@ def main():
 
     def load(p):
         if p not in content:
-            with open(p, encoding="utf-8", newline="") as f:  # คงรูปแบบขึ้นบรรทัดเดิมของไฟล์
-                content[p] = f.read()
+            try:
+                with open(p, encoding="utf-8", newline="") as f:  # คงรูปแบบขึ้นบรรทัดเดิมของไฟล์
+                    content[p] = f.read()
+            except UnicodeDecodeError:
+                print(f"อ่านไฟล์ไม่ได้ ไม่ใช่ UTF-8: {p.relative_to(root).as_posix()} ไม่ได้เขียนไฟล์ใด")
+                sys.exit(2)
         return content[p]
 
     problems = []
