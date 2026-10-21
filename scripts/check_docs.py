@@ -267,7 +267,8 @@ def check_file_refs(root, docs):
 
 # ยอมให้ชื่อไฟล์ถูกคร่อมด้วย ` ** " หรือเป็นลิงก์ [ชื่อ](ชื่อ) ก่อนคำว่า ข้อ
 WRAP = r"[`*\"'\u201c\u201d\u2018\u2019)]*"  # เครื่องหมายที่คร่อมชื่อไฟล์ได้: ` * \" ' “ ” ‘ ’ )
-SECTION_REF = re.compile(r"((?:[A-Za-z0-9_.-]+/)*\d\d-[a-z0-9-]+\.md)" + WRAP + r"(?:\]\([^)\s]*\))?" + WRAP + r"\s+(?:ข้อ|หัวข้อ|หัวข้อที่|section)\s+", re.IGNORECASE)
+# ระหว่างชื่อไฟล์กับคำว่า ข้อ ยอมให้มีช่องว่าง วงเล็บเปิด โคลอน จุลภาค หรือขีด เช่น "02-features.md (ข้อ 1.2)"
+SECTION_REF = re.compile(r"((?:[A-Za-z0-9_.-]+/)*\d\d-[a-z0-9-]+\.md)" + WRAP + r"(?:\]\([^)\s]*\))?" + WRAP + r"[\s(:,;\u2013\u2014-]*(?:ข้อ|หัวข้อ|หัวข้อที่|section)\s+", re.IGNORECASE)
 DECISION_REF = re.compile(r"(?:ประเด็นที่|(?<![A-Za-z0-9_])Decisions?)\s+#?(?=\d)", re.IGNORECASE)
 CLOSE_LINE = re.compile(r"^\*\*[^*\n]*(?:ประเด็นที่ต้องปิด|Decisions to close)[^*\n]*:\*\*\s*(.*)$", re.IGNORECASE)
 FLOW_WORD = r"(?<![A-Za-z0-9_])Flow"
@@ -404,7 +405,8 @@ def check_readme_lists_files(root, docs):
                     err("README.md", i, f"ลิงก์ชี้ไปยังไฟล์ที่ไม่มีอยู่: {target}")
 
 
-CODE = re.compile(r"(?<![\w-])([A-Z]{1,4}(?:-[A-Z]{1,3})?)-([A-Z]?\d{1,4})(?![\w-])")
+# lookaround ใช้เฉพาะอักษรละติน เพื่อให้ "รหัสF-01" ที่ติดคำไทยถูกตรวจด้วย
+CODE = re.compile(r"(?<![A-Za-z0-9_-])([A-Z]{1,4}(?:-[A-Z]{1,3})?)-([A-Z]?\d{1,4})(?![A-Za-z0-9_-])")
 
 
 def check_invented_codes(docs):
@@ -421,11 +423,12 @@ def check_invented_codes(docs):
                           f"ถ้าเป็นรหัสที่ตั้งขึ้นเอง ให้เปลี่ยนเป็นเรียกด้วยชื่อ")
 
 
-LEFTOVER = re.compile(r"\b(TODO|TBD|FIXME|Lorem ipsum)\b")
+LEFTOVER = re.compile(r"(?<![A-Za-z0-9_])(TODO|TBD|FIXME|Lorem ipsum)(?![A-Za-z0-9_])")
 # ไม่นับ List<TYPE> (มีอักษรละตินติดหน้า <) และเครื่องหมายเปรียบเทียบ เช่น "< 1000 บาท และ >" (หลัง < เป็นช่องว่าง)
 # รวม <...> และ <…> ที่คัดมาจากโครงแล้วยังไม่ได้แทน
 PLACEHOLDER = re.compile(r"(?<![A-Za-z0-9_])<((?:[A-Za-z\u0E00-\u0E7F][^<>\n@]{0,60})|(?:(?:\.{2,}|\u2026)[^<>\n]{0,60}))>")
 HTML_TAGS = {"br", "b", "i", "u", "em", "strong", "sub", "sup", "kbd", "span", "div", "p", "a", "img",
+             "h1", "h2", "h3", "h4", "h5", "h6", "center", "font", "s", "del", "ins", "mark", "small", "blockquote",
              "details", "summary", "table", "tr", "td", "th", "thead", "tbody", "ul", "ol", "li", "hr", "code", "pre"}
 
 
@@ -439,7 +442,7 @@ def check_leftovers(docs):
             for p in PLACEHOLDER.finditer(clean):
                 parts = p.group(1).split()
                 name = parts[0].lower().rstrip("/") if parts else ""
-                if name in HTML_TAGS:
+                if name in HTML_TAGS or re.match(r"^[a-z][a-z0-9+.-]*:", p.group(1)):  # แท็ก HTML หรือ autolink เช่น <https://...>
                     continue
                 warn(d.rel, i, f"พบช่องที่อาจยังไม่ได้แทนค่า: <{p.group(1)}>")
 
@@ -500,7 +503,11 @@ def check_decision_summary(docs):
     for d in docs:
         if not is_decisions(d):
             continue
-        heading_nums = {n for n in d.heading_numbers() if n.isdigit()}
+        all_nums = [NUM_TOKEN.match(t).group(1) for _, _, t in d.headings if NUM_TOKEN.match(t)]
+        digit_nums = [n for n in all_nums if n.isdigit()]
+        for n in sorted({x for x in digit_nums if digit_nums.count(x) > 1}, key=int):
+            err(d.rel, 0, f"หัวข้อประเด็นที่ {n} ซ้ำกัน {digit_nums.count(n)} ครั้ง การอ้างประเด็นที่ {n} จะกำกวม")
+        heading_nums = set(digit_nums)
         if not heading_nums:
             continue
         first_numbered = min(l for l, _, t in d.headings if NUM_TOKEN.match(t))
