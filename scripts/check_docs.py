@@ -163,7 +163,7 @@ def check_structure(root):
                 if item.is_dir():
                     warn(f"{sub.name}/{item.name}/", 0, "เป็นโฟลเดอร์ย่อย ชุดเอกสารไม่ใช้โฟลเดอร์ย่อยใน docs/ หรือ plans/")
                     continue
-                if item.suffix.lower() != ".md":
+                if item.suffix != ".md":  # นามสกุลต้องเป็น .md ตัวเล็ก เพราะ glob ของสคริปต์แยกตัวพิมพ์
                     warn(f"{sub.name}/{item.name}", 0, "ไม่ใช่ไฟล์ .md ชุดเอกสารมีเฉพาะไฟล์ Markdown ห้ามลบหรือย้ายถ้าคุณไม่ได้สร้างเอง")
 
 
@@ -191,12 +191,51 @@ def check_numbering(root):
             err("docs/", 0, f"เลขนำหน้าไฟล์ข้ามจาก {a:02d} ไป {b:02d}")
 
 
-# ข้อความใน [] () {} ของ flowchart ที่มีวงเล็บ ทับ หรือโคลอน แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูด จะทำให้ผังวาดไม่ได้
-# อักขระที่ทำให้ Mermaid 11 วาดไม่ได้เมื่ออยู่ในข้อความที่ไม่ได้ครอบด้วยเครื่องหมายคำพูด: วงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ และเครื่องหมายคำพูดเอง
+# ตรวจข้อความในโหนดของ flowchart: อักขระที่ทำให้ Mermaid 11 วาดไม่ได้เมื่ออยู่ในข้อความที่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ
+# คือ วงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ และเครื่องหมายคำพูดเอง ส่วนโคลอนและทับใช้ได้ (ยืนยันกับ mermaid@11 ด้วย mermaid.parse)
 LABEL_BREAKERS = re.compile(r"[()\[\]{}|@\"]")
-LABEL = re.compile(r"[A-Za-z0-9_\u0E00-\u0E7F]+\s*(\(\[|\[\(|\[/|\[\\|\[\[|\(\(|\{\{|\[|\(|\{|>)\s*"
-                   r"(\"[^\"\n]*\"|[^\]\)\}\n]*?)\s*(\]\)|\)\]|/\]|\\\]|\]\]|\)\)|\}\}|\]|\)|\})")
-EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")
+QUOTED = re.compile(r"\"[^\"\n]*\"")
+NODE_ID = re.compile(r"[A-Za-z0-9_\u0E00-\u0E7F]+\s*")
+# ตัวเปิดของแต่ละรูปทรง เรียงยาวก่อนสั้น และตัวปิดที่คู่กัน
+SHAPES = [("([", "])"), ("[(", ")]"), ("[[", "]]"), ("((", "))"), ("{{", "}}"), ("[/", "/]"), ("[\\", "\\]"),
+          ("[", "]"), ("(", ")"), ("{", "}"), (">", "]")]
+AFTER_CLOSE = re.compile(r"(?:\s|$|[-;&:=.])")  # สิ่งที่ตามหลังโหนดได้ เช่น ช่องว่าง ลูกศร ; & :::class
+EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")  # ข้อความบนเส้น -->|...| ซึ่งวงเล็บ วงเล็บเหลี่ยม ปีกกา และเครื่องหมายคำพูดก็ทำให้พังเช่นกัน
+EDGE_BREAKERS = re.compile(r"[()\[\]{}\"]")
+
+
+def node_labels(line):
+    """คืนข้อความในโหนดทุกตัวของบรรทัด โดยจับคู่ตัวเปิดกับตัวปิดตามรูปทรง ข้อความที่ครอบเครื่องหมายคำพูดถูกแทนด้วย \"\" ก่อน"""
+    line = QUOTED.sub('""', line)
+    out = []
+    pos = 0
+    while True:
+        m = NODE_ID.search(line, pos)
+        if not m:
+            break
+        rest = line[m.end():]
+        opener = next((o for o, _ in SHAPES if rest.startswith(o)), None)
+        if not opener:
+            pos = m.end() if m.end() > pos else pos + 1
+            continue
+        closer = dict(SHAPES)[opener]
+        body_start = m.end() + len(opener)
+        search = body_start
+        found = -1
+        while True:
+            k = line.find(closer, search)
+            if k < 0:
+                break
+            if AFTER_CLOSE.match(line, k + len(closer)):
+                found = k
+                break
+            search = k + 1
+        if found < 0:
+            pos = body_start
+            continue
+        out.append(line[body_start:found])
+        pos = found + len(closer)
+    return out
 
 
 def check_mermaid_labels(d, start, code):
@@ -204,13 +243,17 @@ def check_mermaid_labels(d, start, code):
     if not (first.startswith("flowchart") or first.startswith("graph")):
         return
     for k, line in enumerate(code.splitlines()):
-        texts = [m.group(2) for m in LABEL.finditer(line)] + [m.group(1) for m in EDGE_LABEL.finditer(line)]
-        for t in texts:
+        for m in EDGE_LABEL.finditer(QUOTED.sub('""', line)):
+            if EDGE_BREAKERS.search(m.group(1)):
+                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นของผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา หรือเครื่องหมายคำพูด ซึ่งใช้ใน |...| ไม่ได้ ให้ตัดออกหรือย้ายไปไว้ในโหนด: {m.group(1)[:40]}")
+                break
+        for t in node_labels(line):
             t = re.sub(r"<br\s*/?>", " ", t).strip()  # <br/> คือการขึ้นบรรทัดใหม่ของ Mermaid ใช้ได้โดยไม่ต้องครอบ
-            if not t or (t.startswith('"') and t.endswith('"')):
-                continue
+            if not t or t == '""':
+                continue  # ว่าง หรือครอบเครื่องหมายคำพูดทั้งข้อความแล้ว
             if LABEL_BREAKERS.search(t):
-                warn(d.rel, start + 1 + k, f"ข้อความในผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ (เครื่องหมายคำพูดภายในใช้ #quot;): {t[:40]}")
+                shown = QUOTED.sub("", t)[:40]
+                warn(d.rel, start + 1 + k, f"ข้อความในผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ (เครื่องหมายคำพูดภายในใช้ #quot;): {shown}")
                 break
 
 
