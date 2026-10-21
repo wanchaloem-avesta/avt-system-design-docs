@@ -192,24 +192,38 @@ def check_numbering(root):
 
 
 # ตรวจข้อความในโหนดของ flowchart: อักขระที่ทำให้ Mermaid 11 วาดไม่ได้เมื่ออยู่ในข้อความที่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ
-# คือ วงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ และเครื่องหมายคำพูดเอง ส่วนโคลอนและทับใช้ได้ (ยืนยันกับ mermaid@11 ด้วย mermaid.parse)
-LABEL_BREAKERS = re.compile(r"[()\[\]{}|@\"]")
-EDGE_BREAKERS = re.compile(r"[()\[\]{}\"@]")
+# คือ วงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง เครื่องหมายคำพูด และ @ ที่ติดกับตัวอักษร ส่วนโคลอนและทับใช้ได้ (ยืนยันกับ mermaid@11 ด้วย mermaid.parse)
+LABEL_BREAKERS = re.compile(r"[()\[\]{}|\"]|(?<!\s)@|@(?!\s)")
+EDGE_BREAKERS = re.compile(r"[()\[\]{}\"]|(?<!\s)@|@(?!\s)")
 QUOTED = re.compile(r"\"[^\"\n]*\"")
-NODE_ID = re.compile(r"[A-Za-z0-9_฀-๿]+\s*")
 THAI = re.compile(r"[฀-๿]")
 # ตัวเปิดของแต่ละรูปทรง เรียงยาวก่อนสั้น และตัวปิดที่เป็นไปได้ (สี่เหลี่ยมคางหมูใช้ [/ กับ \] หรือ [\ กับ /] ได้)
 SHAPES = [("(((", [")))"]), ("([", ["])"]), ("[(", [")]"]), ("[[", ["]]"]), ("((", ["))"]), ("{{", ["}}"]),
           ("[/", ["/]", "\\]"]), ("[\\", ["\\]", "/]"]), ("[", ["]"]), ("(", [")"]), ("{", ["}"]), (">", ["]"])]
+# รหัสโหนดต้องติดกับตัวเปิดรูปทรง Mermaid ไม่รับ "A [x]"
+NODE_ID = re.compile(r"[A-Za-z0-9_฀-๿]+")
+SPACED_SHAPE = re.compile(r"(?<![A-Za-z0-9_฀-๿\]\)\}])[A-Za-z0-9_]+\s+[\[({]")
 AFTER_CLOSE = re.compile(r"(?:\s|$|[-;&:=.~<])")  # สิ่งที่ตามหลังโหนดได้ เช่น ช่องว่าง ลูกศร ; & :::class ~~~ <-->
 EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")  # ข้อความบนเส้น -->|...| ใช้กฎเดียวกับโหนด เว้นแต่ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ
-EDGE_TEXT = re.compile(r"(--|-\.|==)(?![>.=-]?>)[^|\n\]\)\}]*?(-{2,}>|-{3,}|--[ox]|={2,}>|={3,}|==[ox]|\.+->|\.-)")  # ไม่ข้ามตัวปิดรูปทรง เพื่อไม่ให้ -- ในข้อความโหนดถูกอ่านเป็นเส้น  # ข้อความบนเส้นแบบ A -- ข้อความ --> B รวม --o --x === และข้อความที่มี - . =
+EDGE_TEXT = re.compile(r"(--|-\.|==)(?![>.=-]?>)[^|\n]*?(-{2,}>|-{3,}|--[ox]|={2,}>|={3,}|==[ox]|\.+->|\.-)")  # ข้อความบนเส้นแบบ A -- ข้อความ --> B ใช้หลังตัดโหนดออกแล้ว
 SHAPE_SPEC = re.compile(r"@\{[^}\n]*\}")  # A@{ shape: rect, label: ... } ข้อความใน label ใช้เครื่องหมายคำพูดเดี่ยวหรือไม่ครอบก็ได้
-FLOW_KEYWORDS = ("subgraph", "end", "direction", "classdef", "class ", "style ", "linkstyle", "click ")
+# คำสงวนของ flowchart ที่ใช้เป็นรหัสโหนดไม่ได้ (แยกตัวพิมพ์ Class หรือ END ใช้ได้)
+RESERVED = re.compile(r"(?<![A-Za-z0-9_-])(?<![A-Za-z0-9_]-)(end|class|style|click|href|call|interpolate|linkStyle|classDef|subgraph|flowchart|graph)(?![A-Za-z0-9_])")  # end-user ก็ไม่ได้ แต่ x-end ได้
+LEADING_COMMAND = re.compile(r"^\s*(class|style|click|linkStyle|classDef|subgraph|direction|end)(?![A-Za-z0-9_])")
+ER_ENTITY = r"[A-Za-z0-9_-]+"
+ER_REL_LINE = re.compile(r"^\s*(\S+)\s+[|}o{]+(?:--|\.\.)[|}o{]+\s+(\S+)\s*(?::\s*(.*?))?\s*$")  # USER ||--o{ ORDER : label
+# ป้ายที่ไม่ครอบเครื่องหมายคำพูดต้องเป็นคำเดียว ขึ้นต้นด้วยตัวอักษร มีได้แค่ตัวอักษร ตัวเลข _ - . และไม่ใช่คำสงวน one many to (ยืนยันกับ mermaid@11)
+ER_PLAIN = re.compile(r"^[A-Za-z_฀-๿][A-Za-z0-9_.\-฀-๿]*$")
+ER_RESERVED = {"one", "many", "to", "only", "zero", "or", "more", "optionally"}
+
+
+def mask_quotes(line):
+    """แทนข้อความในเครื่องหมายคำพูดด้วย "Q" (ถ้ามีเนื้อหา) หรือคง "" ไว้ (ถ้าว่าง ซึ่ง Mermaid ไม่รับ)"""
+    return QUOTED.sub(lambda m: '"Q"' if len(m.group(0)) > 2 else '""', line)
 
 
 def mermaid_body(code):
-    """บรรทัดของผัง ไม่รวม frontmatter --- ... --- ที่หัวผัง และคอมเมนต์ %%"""
+    """บรรทัดของผัง ไม่รวม frontmatter --- ... --- ที่หัวผัง คอมเมนต์ และ directive %%{ ... }%% ที่นำหน้าชนิดผัง"""
     lines = code.splitlines()
     i = 0
     while i < len(lines) and not lines[i].strip():
@@ -219,20 +233,24 @@ def mermaid_body(code):
         while j < len(lines) and lines[j].strip() != "---":
             j += 1
         i = j + 1
-    while i < len(lines) and not lines[i].strip():
-        i += 1
-    # directive %%{ ... }%% แบบหลายบรรทัด
-    if i < len(lines) and lines[i].strip().startswith("%%{") and "}%%" not in lines[i]:
-        j = i
-        while j < len(lines) and "}%%" not in lines[j]:
-            j += 1
-        i = j + 1
+    while i < len(lines):
+        st = lines[i].strip()
+        if not st:
+            i += 1
+        elif st.startswith("%%{") and "}%%" not in st:
+            j = i
+            while j < len(lines) and "}%%" not in lines[j]:
+                j += 1
+            i = j + 1
+        elif st.startswith("%%"):
+            i += 1
+        else:
+            break
     return [(k, l) for k, l in enumerate(lines) if k >= i]
 
 
 def node_labels(line):
-    """คืน (ข้อความในโหนด, ตำแหน่งเริ่ม, ตำแหน่งจบ) ทุกตัวของบรรทัด โดยจับคู่ตัวเปิดกับตัวปิดตามรูปทรง ข้อความที่ครอบเครื่องหมายคำพูดถูกแทนด้วย "" ก่อน"""
-    line = QUOTED.sub('""', line)
+    """คืน (ข้อความในโหนด, ตำแหน่งเริ่ม, ตำแหน่งจบ, ตัวเปิด) ทุกตัวของบรรทัด โดยจับคู่ตัวเปิดกับตัวปิดตามรูปทรง"""
     out = []
     pos = 0
     while True:
@@ -261,27 +279,30 @@ def node_labels(line):
         if found < 0:
             pos = body_start
             continue
-        out.append((line[body_start:found], body_start, found + len(found_closer)))
+        out.append((line[body_start:found], body_start, found + len(found_closer), opener))
         pos = found + len(found_closer)
-    return out, line
-
-
-ER_ENTITY = r"[A-Za-z0-9_-]+(?:\s*\[[^\]\n]*\])?"  # ORDER หรือ ORDER[\"ชื่อ\"]
-ER_REL = re.compile(r"^\s*" + ER_ENTITY + r"\s+[|}o{]+(?:--|\.\.)[|}o{]+\s+" + ER_ENTITY + r"\s*:\s*(.+?)\s*$")  # USER ||--o{ ORDER : label
-# ป้ายที่ไม่ครอบเครื่องหมายคำพูดต้องเป็นคำเดียว ขึ้นต้นด้วยตัวอักษร มีได้แค่ตัวอักษร ตัวเลข _ และ - (ยืนยันกับ mermaid@11)
-ER_PLAIN = re.compile(r"^[A-Za-z_\u0E00-\u0E7F][A-Za-z0-9_.\-\u0E00-\u0E7F]*$")
+    return out
 
 
 def check_er_labels(d, start, body):
     for k, line in body:
-        m = ER_REL.match(line)
+        stripped = line.strip()
+        if not stripped or stripped.startswith("%%") or stripped.startswith("erDiagram"):
+            continue
+        m = ER_REL_LINE.match(line)
         if not m:
             continue
-        label = m.group(1)
+        left, right, label = m.group(1), m.group(2), m.group(3)
+        if "[" in left or "[" in right:
+            warn(d.rel, start + 1 + k, f"ชื่อ Entity ในบรรทัดความสัมพันธ์ของ erDiagram ใส่ [ชื่อแสดง] ไม่ได้ ให้ใส่ชื่อแสดงในบล็อกนิยาม Entity แทน: {stripped[:40]}")
+            continue
+        if label is None or not label:
+            warn(d.rel, start + 1 + k, f"บรรทัดความสัมพันธ์ของ erDiagram ต้องมี : ป้าย ต่อท้ายเสมอ: {stripped[:40]}")
+            continue
         if label.startswith('"') and label.endswith('"') and len(label) >= 2 and label.count('"') == 2:
             continue
-        if not ER_PLAIN.match(label):
-            warn(d.rel, start + 1 + k, f"ป้ายความสัมพันธ์ใน erDiagram ที่ไม่ได้ครอบด้วยเครื่องหมายคำพูดต้องเป็นคำเดียว ขึ้นต้นด้วยตัวอักษร และมีได้แค่ตัวอักษร ตัวเลข _ - ให้ครอบด้วยเครื่องหมายคำพูดทั้งป้าย: {label[:40]}")
+        if not ER_PLAIN.match(label) or label.lower() in ER_RESERVED:
+            warn(d.rel, start + 1 + k, f"ป้ายความสัมพันธ์ใน erDiagram ให้ครอบด้วยเครื่องหมายคำพูดทั้งป้าย ป้ายที่ไม่ครอบรับได้เฉพาะคำเดียวที่ไม่มีเครื่องหมายพิเศษและไม่ใช่คำสงวนเช่น one many to: {label[:40]}")
 
 
 def check_mermaid_labels(d, start, code):
@@ -307,7 +328,7 @@ def check_mermaid_labels(d, start, code):
             if line.count('"') % 2 == 0:
                 continue
             in_quote = -1
-            line = 'Q["' + line[line.index('"'):]  # ตรวจเฉพาะส่วนหลังเครื่องหมายคำพูดปิดของข้อความหลายบรรทัด
+            line = 'Q["Q' + line[line.index('"'):]  # ตรวจเฉพาะส่วนหลังเครื่องหมายคำพูดปิดของข้อความหลายบรรทัด
             stripped = line.strip()
         if not stripped or stripped.startswith("%%") or stripped.lower().startswith(("acctitle", "accdescr")):
             continue
@@ -318,57 +339,72 @@ def check_mermaid_labels(d, start, code):
                 continue
             warn(d.rel, start + 1 + k, "เครื่องหมายคำพูดในผัง Mermaid ไม่ครบคู่ ถ้าตั้งใจใช้สัญลักษณ์นิ้ว ให้ครอบข้อความทั้งหมดและเขียนเป็น #quot;")
             continue
-        if "%%" in QUOTED.sub('""', line):
+        if "%%" in mask_quotes(line):
             warn(d.rel, start + 1 + k, "คอมเมนต์ %% ของผัง Mermaid ต้องอยู่บรรทัดของตัวเอง เมื่อต่อท้ายบรรทัดอื่น Mermaid 11 มักวาดไม่ได้ ให้ย้ายไปบรรทัดใหม่")
-            break
-        line = SHAPE_SPEC.sub("@{}", line)
-        masked = QUOTED.sub('""', line)
-        edge_warned = False
-        for m in EDGE_TEXT.finditer(masked):
-            inner = masked[m.start() + len(m.group(1)):m.end() - len(m.group(2))].strip()
-            if inner == '""' or not inner:
-                continue
-            if '"' in inner:
-                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นแบบ -- ข้อความ --> มีเครื่องหมายคำพูดแต่ไม่ได้ครอบทั้งข้อความ ให้เขียน -- \"ข้อความ\" -->: {inner[:40]}")
-                edge_warned = True
-                break
-            if (m.group(1) == "-." and "." in inner) or (m.group(1) == "==" and "=" in inner):
-                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นประหรือเส้นหนาแบบ -. ข้อความ .-> หรือ == ข้อความ ==> มีจุดหรือเครื่องหมายเท่ากับ ซึ่ง Mermaid อ่านเป็นตัวเส้น ให้ใช้ -.->|\"ข้อความ\"| หรือ ==>|\"ข้อความ\"| แทน: {inner[:40]}")
-                edge_warned = True
-                break
-        if edge_warned:
             continue
+        line = SHAPE_SPEC.sub("@{}", line)
+        masked = mask_quotes(line)
+        # 1) ข้อความบนเส้นแบบ |...| ตรวจแล้วตัดออกก่อน เพื่อไม่ให้ > ในข้อความถูกอ่านเป็นตัวเปิดโหนดรูปธง
+        warned = False
         for m in EDGE_LABEL.finditer(masked):
             t = m.group(1).strip()
-            if t and t != '""' and EDGE_BREAKERS.search(t):
+            if t and t != '"Q"' and EDGE_BREAKERS.search(t):
                 warn(d.rel, start + 1 + k, f"ข้อความบนเส้นของผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ เช่น -->|\"ใช่ (ต่อ)\"|: {t[:40]}")
+                warned = True
                 break
-        # ตัดข้อความบนเส้นออกก่อนหาโหนด เพื่อไม่ให้ > ในข้อความเช่น "ยอด > 1000" ถูกอ่านเป็นตัวเปิดโหนดรูปธง
-        no_edges = EDGE_TEXT.sub(r"\1 \2", EDGE_LABEL.sub("||", masked))
-        labels, no_edges = node_labels(no_edges)
-        warned = False
-        for t, _, _ in labels:
+        if warned:
+            continue
+        masked = EDGE_LABEL.sub("||", masked)
+        # 2) โหนด
+        labels = node_labels(masked)
+        for t, _, _, opener in labels:
             t = re.sub(r"<br\s*/?>", " ", t).strip()  # <br/> คือการขึ้นบรรทัดใหม่ของ Mermaid ใช้ได้โดยไม่ต้องครอบ
-            if not t or t == '""':
+            if t == '""':
+                warn(d.rel, start + 1 + k, "ข้อความโหนดในผัง Mermaid เป็นเครื่องหมายคำพูดว่าง Mermaid ไม่รับ ให้ใส่ข้อความ")
+                warned = True
+                break
+            if not t or t == '"Q"':
                 continue  # ว่าง หรือครอบเครื่องหมายคำพูดทั้งข้อความแล้ว
-            if LABEL_BREAKERS.search(t):
+            breakers = LABEL_BREAKERS.search(t)
+            if breakers and opener in ("[/", "[\\") and breakers.group(0) == '"':
+                continue  # สี่เหลี่ยมคางหมูรับเครื่องหมายคำพูดภายในได้
+            if breakers:
                 warn(d.rel, start + 1 + k, f"ข้อความในผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ (เครื่องหมายคำพูดภายในใช้ #quot;): {t[:40]}")
                 warned = True
                 break
         if warned or stripped.lower().startswith(("graph", "flowchart")):
             continue
-        # รหัสโหนด รหัส subgraph และคำสั่ง ต้องเป็นอักษรละติน Mermaid ไม่รับรหัสภาษาไทย ชื่อไทยต้องอยู่ในข้อความของโหนด
-        outside = no_edges
-        for _, a, b in sorted(labels, key=lambda x: -x[1]):
+        # 3) ส่วนที่เหลือนอกโหนด: ข้อความบนเส้นแบบ -- ข้อความ --> รหัสโหนด และคำสั่ง
+        outside = masked
+        for _, a, b, _ in sorted(labels, key=lambda x: -x[1]):
             outside = outside[:a] + outside[b:]
+        for m in EDGE_TEXT.finditer(outside):
+            inner = outside[m.start() + len(m.group(1)):m.end() - len(m.group(2))].strip()
+            if inner == '"Q"' or not inner:
+                continue
+            if '"' in inner:
+                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นแบบ -- ข้อความ --> มีเครื่องหมายคำพูดแต่ไม่ได้ครอบทั้งข้อความ ให้เขียน -- \"ข้อความ\" -->: {inner[:40]}")
+                warned = True
+                break
+            if (m.group(1) == "-." and "." in inner) or (m.group(1) == "==" and "=" in inner):
+                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นประหรือเส้นหนาแบบ -. ข้อความ .-> หรือ == ข้อความ ==> มีจุดหรือเครื่องหมายเท่ากับ ซึ่ง Mermaid อ่านเป็นตัวเส้น ให้ใช้ -.->|\"ข้อความ\"| หรือ ==>|\"ข้อความ\"| แทน: {inner[:40]}")
+                warned = True
+                break
+        if warned:
+            continue
+        outside = EDGE_TEXT.sub(r"\1 \2", outside)
         if stripped.lower().startswith("subgraph"):
             outside = outside.split("[", 1)[0]
+        if SPACED_SHAPE.search(outside) and not LEADING_COMMAND.match(stripped):
+            warn(d.rel, start + 1 + k, f"มีช่องว่างระหว่างรหัสโหนดกับรูปทรง เช่น A [x] Mermaid ไม่รับ ให้เขียนติดกัน A[x]: {stripped[:40]}")
+            continue
         if THAI.search(outside):
             warn(d.rel, start + 1 + k, f"รหัสโหนดหรือชื่อ subgraph ในผัง flowchart เป็นภาษาไทย ซึ่ง Mermaid 11 ปฏิเสธเมื่ออยู่ต้นคำสั่งและไม่รับประกันตำแหน่งอื่น ให้ใช้รหัสละตินแล้วใส่ชื่อไทยในข้อความ เช่น A[เริ่ม] หรือ subgraph S1[ชื่อ]: {stripped[:40]}")
             continue
-        # รหัสโหนดชื่อ end ตัวเล็กชนกับคำสั่งจบ subgraph
-        if re.search(r"(?<![A-Za-z0-9_])(?<![A-Za-z0-9_]-)end(?![A-Za-z0-9_])", outside) and stripped != "end":
-            warn(d.rel, start + 1 + k, f"ใช้ end เป็นรหัสโหนดไม่ได้ เพราะเป็นคำสั่งจบ subgraph ให้เปลี่ยนเป็น End หรือ END: {stripped[:40]}")
+        rest = LEADING_COMMAND.sub("", outside, count=1)
+        m = RESERVED.search(rest)
+        if m:
+            warn(d.rel, start + 1 + k, f"ใช้คำสงวน {m.group(1)} เป็นรหัสโหนดไม่ได้ ให้เปลี่ยนรหัส เช่น {m.group(1).capitalize()} หรือ {m.group(1).upper()}: {stripped[:40]}")
     if in_quote >= 0:
         warn(d.rel, start + 1 + in_quote, "เครื่องหมายคำพูดในผัง Mermaid เปิดแล้วไม่ปิด ถ้าตั้งใจใช้สัญลักษณ์นิ้ว ให้ครอบข้อความทั้งหมดและเขียนเป็น #quot;")
 
