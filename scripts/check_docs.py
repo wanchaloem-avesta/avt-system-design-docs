@@ -200,7 +200,7 @@ NODE_ID = re.compile(r"[A-Za-z0-9_\u0E00-\u0E7F]+\s*")
 SHAPES = [("([", "])"), ("[(", ")]"), ("[[", "]]"), ("((", "))"), ("{{", "}}"), ("[/", "/]"), ("[\\", "\\]"),
           ("[", "]"), ("(", ")"), ("{", "}"), (">", "]")]
 AFTER_CLOSE = re.compile(r"(?:\s|$|[-;&:=.])")  # สิ่งที่ตามหลังโหนดได้ เช่น ช่องว่าง ลูกศร ; & :::class
-EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")  # ข้อความบนเส้น -->|...| ซึ่งวงเล็บ วงเล็บเหลี่ยม ปีกกา และเครื่องหมายคำพูดก็ทำให้พังเช่นกัน
+EDGE_LABEL = re.compile(r"\|([^|\n]*)\|")  # ข้อความบนเส้น -->|...| ซึ่งวงเล็บ วงเล็บเหลี่ยม ปีกกา และเครื่องหมายคำพูดก็ทำให้พังเช่นกัน เว้นแต่ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ
 EDGE_BREAKERS = re.compile(r"[()\[\]{}\"]")
 
 
@@ -244,8 +244,9 @@ def check_mermaid_labels(d, start, code):
         return
     for k, line in enumerate(code.splitlines()):
         for m in EDGE_LABEL.finditer(QUOTED.sub('""', line)):
-            if EDGE_BREAKERS.search(m.group(1)):
-                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นของผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา หรือเครื่องหมายคำพูด ซึ่งใช้ใน |...| ไม่ได้ ให้ตัดออกหรือย้ายไปไว้ในโหนด: {m.group(1)[:40]}")
+            t = m.group(1).strip()
+            if t and t != '""' and EDGE_BREAKERS.search(t):
+                warn(d.rel, start + 1 + k, f"ข้อความบนเส้นของผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ เช่น -->|\"ใช่ (ต่อ)\"|: {QUOTED.sub(chr(34)+chr(34), t)[:40]}")
                 break
         for t in node_labels(line):
             t = re.sub(r"<br\s*/?>", " ", t).strip()  # <br/> คือการขึ้นบรรทัดใหม่ของ Mermaid ใช้ได้โดยไม่ต้องครอบ
