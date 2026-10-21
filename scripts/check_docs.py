@@ -289,7 +289,7 @@ def check_er_labels(d, start, body):
         stripped = line.strip()
         if not stripped or stripped.startswith("%%") or stripped.startswith("erDiagram"):
             continue
-        m = ER_REL_LINE.match(line)
+        m = ER_REL_LINE.match(mask_quotes(line))  # ปิดบังข้อความในเครื่องหมายคำพูดก่อน เพื่อให้ชื่อแสดงที่มีช่องว่างไม่ทำให้บรรทัดไม่ตรงรูป
         if not m:
             continue
         left, right, label = m.group(1), m.group(2), m.group(3)
@@ -299,7 +299,7 @@ def check_er_labels(d, start, body):
         if label is None or not label:
             warn(d.rel, start + 1 + k, f"บรรทัดความสัมพันธ์ของ erDiagram ต้องมี : ป้าย ต่อท้ายเสมอ: {stripped[:40]}")
             continue
-        if label.startswith('"') and label.endswith('"') and len(label) >= 2 and label.count('"') == 2:
+        if label == '"Q"':
             continue
         if not ER_PLAIN.match(label) or label.lower() in ER_RESERVED:
             warn(d.rel, start + 1 + k, f"ป้ายความสัมพันธ์ใน erDiagram ให้ครอบด้วยเครื่องหมายคำพูดทั้งป้าย ป้ายที่ไม่ครอบรับได้เฉพาะคำเดียวที่ไม่มีเครื่องหมายพิเศษและไม่ใช่คำสงวนเช่น one many to: {label[:40]}")
