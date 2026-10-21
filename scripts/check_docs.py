@@ -347,6 +347,7 @@ def check_mermaid_labels(d, start, code):
     in_quote = -1  # บรรทัดที่เปิดเครื่องหมายคำพูดแล้วยังไม่ปิด (ข้อความหลายบรรทัด)
     in_acc = False  # บล็อก accDescr { ... }
     open_node = False  # บรรทัดก่อนเปิดรูปทรงแล้วไม่ปิด บรรทัดต่อไปจนถึงตัวปิดเป็นส่วนของข้อความนั้น
+    open_edge = False  # ป้ายบนเส้นที่ขึ้นบรรทัดใหม่
     first_k = next((k for k, l in body if l.strip() and not l.strip().startswith("%%")), -1)
     depth = 0  # subgraph ที่เปิดอยู่
     for k, line in body:
@@ -370,6 +371,10 @@ def check_mermaid_labels(d, start, code):
             if re.search(r"[\])}]", line):
                 open_node = False
             continue
+        if open_edge:
+            if "|" in line or re.search(r"-{2,}>|\.+->|={2,}>|-{3,}", line):
+                open_edge = False
+            continue
         if in_quote >= 0:
             if line.count('"') % 2 == 0:
                 continue
@@ -388,12 +393,23 @@ def check_mermaid_labels(d, start, code):
         if "%%" in mask_quotes(line):
             warn(d.rel, start + 1 + k, "คอมเมนต์ %% ของผัง Mermaid ต้องอยู่บรรทัดของตัวเอง เมื่อต่อท้ายบรรทัดอื่น Mermaid 11 มักวาดไม่ได้ ให้ย้ายไปบรรทัดใหม่")
             continue
+        if re.match(r"^click(?![A-Za-z0-9_])", stripped):
+            continue  # click A href "url" และ click A call fn() เป็นไวยากรณ์ของ click เอง ไม่ใช่โหนด
         line = SHAPE_SPEC.sub("@{}", line)
         masked = mask_quotes(line)
         # 1) ข้อความบนเส้นแบบ |...| ตรวจแล้วตัดออกก่อน เพื่อไม่ให้ > ในข้อความถูกอ่านเป็นตัวเปิดโหนดรูปธง
         warned = False
+        if masked.count("|") % 2 == 1 or re.search(r"(?:^|\s)(?:--|-\.|==)\s+[^-=.>|]*$", masked):
+            warn(d.rel, start + 1 + k, f"ป้ายบนเส้นเปิดแล้วไม่ปิดในบรรทัดเดียวกัน ป้ายหลายบรรทัดให้ใช้ <br/> แทนการขึ้นบรรทัดใหม่: {stripped[:40]}")
+            open_edge = True
+            continue
         for m in EDGE_LABEL.finditer(masked):
-            t = m.group(1).strip()
+            raw = m.group(1)
+            t = raw.strip()
+            if t == '"Q"' and raw[:1] == " ":
+                warn(d.rel, start + 1 + k, f"เครื่องหมายคำพูดของป้ายบนเส้นต้องติดกับ | ไม่มีช่องว่างนำหน้า เช่น -->|\"ข้อความ\"|: {raw[:40]}")
+                warned = True
+                break
             if t and t != '"Q"' and EDGE_BREAKERS.search(t):
                 warn(d.rel, start + 1 + k, f"ข้อความบนเส้นของผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ เช่น -->|\"ใช่ (ต่อ)\"|: {t[:40]}")
                 warned = True
@@ -429,8 +445,8 @@ def check_mermaid_labels(d, start, code):
             warn(d.rel, start + 1 + k, f"โหนดเปิดรูปทรงแล้วไม่ปิดในบรรทัดเดียวกัน ข้อความหลายบรรทัดต้องครอบด้วยเครื่องหมายคำพูดหรือใช้ <br/>: {stripped[:40]}")
             open_node = True
             continue
-        if re.search(r"(?<=[\])}])&|&(?=[A-Za-z0-9_]+[\[({])", masked):
-            warn(d.rel, start + 1 + k, f"เครื่องหมาย & ที่ติดกับโหนดที่มีรูปทรงต้องมีช่องว่างทั้งสองข้าง เช่น A[x] & B[y]: {stripped[:40]}")
+        if re.search(r"(?<=[\])}])&|&(?=[A-Za-z0-9_]+[\[({])", masked) or re.search(r"(?<=\s)&(?=\S)|(?<=\S)&(?=\s)", leftover):
+            warn(d.rel, start + 1 + k, f"เครื่องหมาย & ที่ต่อโหนดต้องมีช่องว่างทั้งสองข้าง เช่น A[x] & B[y] (หรือไม่มีเลยทั้งสองข้างเมื่อเป็นรหัสเปล่า): {stripped[:40]}")
             continue
         for t, _, _, opener in labels:
             raw_first = t[:1]  # อักขระแรกก่อนตัดช่องว่าง เพราะ "[ /api]" ที่มีช่องว่างนำ Mermaid รับ
@@ -443,8 +459,16 @@ def check_mermaid_labels(d, start, code):
                 warn(d.rel, start + 1 + k, f"ข้อความโหนดที่ขึ้นต้นด้วย / หรือ \\ ต้องครอบด้วยเครื่องหมายคำพูด เพราะ Mermaid อ่านเป็นรูปทรง เช่น A[\"/api/v1\"]: {t[:40]}")
                 warned = True
                 break
-            if not t or t == '"Q"':
-                continue  # ว่าง หรือครอบเครื่องหมายคำพูดทั้งข้อความแล้ว
+            if t == '"Q"' and raw_first == " ":
+                warn(d.rel, start + 1 + k, "เครื่องหมายคำพูดของข้อความโหนดต้องติดกับตัวเปิดรูปทรง ไม่มีช่องว่างนำหน้า เช่น A[\"ข้อความ\"]")
+                warned = True
+                break
+            if not t:
+                warn(d.rel, start + 1 + k, f"ข้อความโหนดว่าง เช่น A[] Mermaid ไม่รับ ให้ใส่ข้อความหรือละรูปทรง: {stripped[:40]}")
+                warned = True
+                break
+            if t == '"Q"':
+                continue  # ครอบเครื่องหมายคำพูดทั้งข้อความแล้ว
             breakers = LABEL_BREAKERS.search(t)
             if breakers and opener in ("[/", "[\\") and breakers.group(0) == '"':
                 continue  # สี่เหลี่ยมคางหมูรับเครื่องหมายคำพูดภายในได้
@@ -468,6 +492,9 @@ def check_mermaid_labels(d, start, code):
             sm = re.match(r"^subgraph\s+\S+?\s*\[(.*)\]\s*$", mask_quotes(stripped))
             if sm:
                 title = sm.group(1).strip()
+                if title == '"Q"' and sm.group(1)[:1] == " " or not title:
+                    warn(d.rel, start + 1 + k, f"ชื่อ subgraph ว่าง หรือเครื่องหมายคำพูดไม่ติดกับ [ : {stripped[:40]}")
+                    continue
                 if sm.group(1)[:1] in ("/", "\\"):
                     warn(d.rel, start + 1 + k, f"ชื่อ subgraph ที่ขึ้นต้นด้วย / หรือ \\ ต้องครอบด้วยเครื่องหมายคำพูด: {title[:40]}")
                     continue
@@ -481,8 +508,6 @@ def check_mermaid_labels(d, start, code):
         if THAI.search(outside):
             warn(d.rel, start + 1 + k, f"รหัสโหนดหรือชื่อ subgraph ในผัง flowchart เป็นภาษาไทย ซึ่ง Mermaid 11 ปฏิเสธเมื่ออยู่ต้นคำสั่งและไม่รับประกันตำแหน่งอื่น ให้ใช้รหัสละตินแล้วใส่ชื่อไทยในข้อความ เช่น A[เริ่ม] หรือ subgraph S1[ชื่อ]: {stripped[:40]}")
             continue
-        if re.match(r"^click(?![A-Za-z0-9_])", stripped):
-            continue  # click A href "url" และ click A call fn() เป็นไวยากรณ์ของ click เอง
         rest = LEADING_COMMAND.sub("", outside, count=1)
         for m in RESERVED.finditer(rest):
             nxt = rest[m.end():m.end() + 1]
