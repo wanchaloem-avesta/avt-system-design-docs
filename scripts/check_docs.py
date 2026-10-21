@@ -225,17 +225,22 @@ def is_source_doc(d):
     return d.path.name.startswith("00-")
 
 
-def check_file_refs(root, docs):
-    # ชื่อไฟล์ต้นทางของลูกค้าที่บันทึกไว้ใน 00-source.md ไม่ต้องมีอยู่ในโครงการ
-    source_names = set()
+def customer_file_names(docs):
+    """ชื่อไฟล์ต้นทางของลูกค้าที่บันทึกไว้ใน 00-source.md ไม่ต้องมีอยู่ในโครงการ ยกเว้นชื่อรูปแบบ NN-ชื่อ.md ซึ่งเป็นชื่อของชุดเอกสารนี้"""
+    names = set()
     for d in docs:
         if is_source_doc(d):
             for m in FILE_TOKEN.finditer(d.text):
                 if not re.match(r"^\d\d-[a-z0-9-]+\.md$", Path(m.group(1)).name):
-                    source_names.add(Path(m.group(1)).name)
+                    names.add(Path(m.group(1)).name)
+    return names
+
+
+def check_file_refs(root, docs):
+    source_names = customer_file_names(docs)
     for d in docs:
-        if is_source_doc(d):
-            continue
+        if is_source_doc(d) or d.rel == "README.md":
+            continue  # README ตรวจแยกใน check_readme_lists_files รวมบล็อกโค้ด
         for i, line in d.prose_lines():
             for m in FILE_TOKEN.finditer(line):
                 tok = m.group(1)
@@ -368,7 +373,7 @@ def check_readme_lists_files(root, docs):
             if p.name not in readme.text:
                 err("README.md", 0, f"README ไม่ได้กล่าวถึงไฟล์ {sub}/{p.name}")
     # ชื่อไฟล์ที่ README กล่าวถึง รวมในแผนผังต้นไม้ที่อยู่ในบล็อกโค้ด ต้องมีจริง
-    source_names = {Path(m.group(1)).name for d in docs if is_source_doc(d) for m in FILE_TOKEN.finditer(d.text)}
+    source_names = customer_file_names(docs)
     for i, line in enumerate(readme.lines, 1):
         for m in FILE_TOKEN.finditer(line):
             tok = m.group(1)
@@ -376,6 +381,13 @@ def check_readme_lists_files(root, docs):
                 continue
             if not resolve(root, readme, tok):
                 err("README.md", i, f"README กล่าวถึงไฟล์ที่ไม่มีอยู่: {tok}")
+        if not readme.in_code[i - 1]:
+            for m in MD_LINK.finditer(line):
+                target = m.group(1)
+                if re.match(r"^[a-z][a-z0-9+.-]*:", target) or target.startswith("#"):
+                    continue
+                if not resolve(root, readme, target):
+                    err("README.md", i, f"ลิงก์ชี้ไปยังไฟล์ที่ไม่มีอยู่: {target}")
 
 
 CODE = re.compile(r"(?<![\w-])([A-Z]{1,4}(?:-[A-Z]{1,3})?)-([A-Z]?\d{1,4})(?![\w-])")
@@ -508,7 +520,7 @@ def actual_counts(docs):
             nums = [n for n in d.heading_numbers() if n.isdigit()]
             statuses = {}
             for line in d.lines:
-                m = re.match(r"^\*\*(?:สถานะ|Status):\*\*\s*(.+?)(?:\s*\(|$)", line.strip())
+                m = re.match(r"^\*\*(?:สถานะ|Status):\*\*\s*(.+?)(?:\s*\(|$)", line.strip(), re.IGNORECASE)
                 if m:
                     key = m.group(1).strip()
                     statuses[key] = statuses.get(key, 0) + 1
@@ -536,7 +548,10 @@ def actual_counts(docs):
             if entities:
                 out.append(f"{d.rel}: Entity {len(entities)} รายการ")
     if len(all_flows) > 1:
-        out.append(f"รวมทุกไฟล์ลำดับการทำงาน: Flow {sum(len(v) for v in all_flows.values())} เรื่อง")
+        union = set().union(*all_flows.values())
+        total = sum(len(v) for v in all_flows.values())
+        dup = f" (มีเลขซ้ำ {total - len(union)} เลข ดูรายการผิดพลาด)" if total != len(union) else ""
+        out.append(f"รวมทุกไฟล์ลำดับการทำงาน: Flow {len(union)} เรื่อง{dup}")
     return out
 
 
@@ -584,7 +599,7 @@ def render_mermaid(docs):
   const res = [];
   for (const el of document.querySelectorAll('pre.m')) {
     try { await mermaid.parse(el.textContent); await mermaid.render('g' + el.id, el.textContent); res.push(el.id + '=ok'); }
-    catch (e) { res.push(el.id + '=ERR ' + String(e).replace(/\\s+/g, ' ').slice(0, 160)); }
+    catch (e) { res.push(el.id + '=ERR ' + String(e).replace(/\\s+/g, ' ').replace(/\\|\\|/g, '|').slice(0, 160)); }
   }
   out.textContent = res.join('||'); document.body.prepend(out);
 })();
@@ -615,6 +630,8 @@ def render_mermaid(docs):
     ok = 0
     for item in result.split("||"):
         key, _, status = item.partition("=")
+        if not re.fullmatch(r"d\d+", key) or int(key[1:]) >= len(blocks):
+            continue  # ชิ้นที่แยกผิดเพราะข้อความผิดพลาดของ Mermaid มี || อยู่ข้างใน
         n = int(key[1:])
         rel, start, _ = blocks[n]
         if status == "ok":
