@@ -209,12 +209,14 @@ EDGE_TEXT = re.compile(r"(--|-\.|==)(?![>.=-]?>)[^|\n]*?(-{2,}>|-{3,}|--[ox]|={2
 SHAPE_SPEC = re.compile(r"@\{[^}\n]*\}")  # A@{ shape: rect, label: ... } ข้อความใน label ใช้เครื่องหมายคำพูดเดี่ยวหรือไม่ครอบก็ได้
 # คำสงวนของ flowchart ที่ใช้เป็นรหัสโหนดไม่ได้ (แยกตัวพิมพ์ Class หรือ END ใช้ได้)
 RESERVED = re.compile(r"(?<![A-Za-z0-9_-])(?<![A-Za-z0-9_]-)(end|class|style|click|href|call|interpolate|linkStyle|classDef|subgraph|flowchart|graph)(?![A-Za-z0-9_])")  # end-user ก็ไม่ได้ แต่ x-end ได้
-LEADING_COMMAND = re.compile(r"^\s*(?:(?:class|style|click|linkStyle|classDef|subgraph|direction)(?![A-Za-z0-9_-])|end\s*$)")  # end เป็นคำสั่งเฉพาะเมื่ออยู่เดี่ยว ๆ
+# คำสั่งต้นบรรทัดนับเป็นคำสั่งเฉพาะเมื่อตามด้วยช่องว่างและไม่ใช่ลูกศรหรือรูปทรง (class --> B คือใช้ class เป็นรหัสโหนด) ส่วน end ต้องอยู่เดี่ยว ๆ (มี ; ได้)
+LEADING_COMMAND = re.compile(r"^\s*(?:(?:class|style|click|linkStyle|classDef|subgraph|direction)(?=\s)(?!\s*(?:-->|---|-\.|==|--[ox]|<-|[\[({>]|&|:::|~~~))|end\s*;?\s*$)")
+RESERVED_DASH_OK = {"call", "href", "click"}  # call-center, href-x ใช้ได้ และ call[x] href[x] ก็ได้
 ER_ENTITY = r"[A-Za-z0-9_-]+"
-ER_REL_LINE = re.compile(r"^\s*(\S+)\s+[|}o{]+(?:--|\.\.)[|}o{]+\s+(\S+)\s*(?::\s*(.*?))?\s*$")  # USER ||--o{ ORDER : label
+ER_REL_LINE = re.compile(r"^\s*(\S+)\s+[|}o{]+(?:--|\.\.)[|}o{]+\s+(\S+)(?:\s*:\s*(.*?)|\s+(\S.*?))?\s*$")  # USER ||--o{ ORDER : label (group 4 คือข้อความที่ลืม :)
 # ป้ายที่ไม่ครอบเครื่องหมายคำพูดต้องเป็นคำเดียว ขึ้นต้นด้วยตัวอักษร มีได้แค่ตัวอักษร ตัวเลข _ - . และไม่ใช่คำสงวน one many to (ยืนยันกับ mermaid@11)
 ER_PLAIN = re.compile(r"^[A-Za-z_฀-๿][A-Za-z0-9_.\-฀-๿]*$")
-ER_RESERVED = {"one", "many", "to", "only", "zero", "or", "more", "optionally"}
+ER_RESERVED = {"one", "many", "to"}
 
 
 def mask_quotes(line):
@@ -292,7 +294,10 @@ def check_er_labels(d, start, body):
         m = ER_REL_LINE.match(mask_quotes(line))  # ปิดบังข้อความในเครื่องหมายคำพูดก่อน เพื่อให้ชื่อแสดงที่มีช่องว่างไม่ทำให้บรรทัดไม่ตรงรูป
         if not m:
             continue
-        left, right, label = m.group(1), m.group(2), m.group(3)
+        left, right, label, extra = m.group(1), m.group(2), m.group(3), m.group(4)
+        if extra:
+            warn(d.rel, start + 1 + k, f"บรรทัดความสัมพันธ์ของ erDiagram มีข้อความต่อท้ายโดยไม่มี : ให้เขียน : \"ป้าย\": {stripped[:40]}")
+            continue
         if "[" in left or "[" in right:
             warn(d.rel, start + 1 + k, f"ชื่อ Entity ในบรรทัดความสัมพันธ์ของ erDiagram ใส่ [ชื่อแสดง] ไม่ได้ ให้ใส่ชื่อแสดงในบล็อกนิยาม Entity แทน: {stripped[:40]}")
             continue
@@ -300,6 +305,9 @@ def check_er_labels(d, start, body):
             warn(d.rel, start + 1 + k, f"บรรทัดความสัมพันธ์ของ erDiagram ต้องมี : ป้าย ต่อท้ายเสมอ: {stripped[:40]}")
             continue
         if label == '"Q"':
+            continue
+        if label == '""':
+            warn(d.rel, start + 1 + k, f"ป้ายความสัมพันธ์ใน erDiagram ว่าง ให้ใส่ข้อความในเครื่องหมายคำพูด: {stripped[:40]}")
             continue
         if not ER_PLAIN.match(label) or label.lower() in ER_RESERVED:
             warn(d.rel, start + 1 + k, f"ป้ายความสัมพันธ์ใน erDiagram ให้ครอบด้วยเครื่องหมายคำพูดทั้งป้าย ป้ายที่ไม่ครอบรับได้เฉพาะคำเดียวที่ไม่มีเครื่องหมายพิเศษและไม่ใช่คำสงวนเช่น one many to: {label[:40]}")
@@ -315,8 +323,18 @@ def check_mermaid_labels(d, start, code):
         return
     in_quote = -1  # บรรทัดที่เปิดเครื่องหมายคำพูดแล้วยังไม่ปิด (ข้อความหลายบรรทัด)
     in_acc = False  # บล็อก accDescr { ... }
+    first_k = next((k for k, l in body if l.strip() and not l.strip().startswith("%%")), -1)
+    depth = 0  # subgraph ที่เปิดอยู่
     for k, line in body:
         stripped = line.strip()
+        if k == first_k:
+            continue  # บรรทัดประกาศชนิดผัง
+        if re.match(r"^subgraph(?![A-Za-z0-9_])", stripped):
+            depth += 1
+        elif re.match(r"^end\s*;?\s*$", stripped):
+            if depth == 0:
+                warn(d.rel, start + 1 + k, "พบ end โดยไม่มี subgraph ที่เปิดอยู่")
+            depth = max(0, depth - 1)
         if in_acc:
             if "}" in stripped:
                 in_acc = False
@@ -372,7 +390,7 @@ def check_mermaid_labels(d, start, code):
                 warn(d.rel, start + 1 + k, f"ข้อความในผัง Mermaid มีวงเล็บ วงเล็บเหลี่ยม ปีกกา ขีดตั้ง @ หรือเครื่องหมายคำพูด แต่ไม่ได้ครอบด้วยเครื่องหมายคำพูดทั้งข้อความ (เครื่องหมายคำพูดภายในใช้ #quot;): {t[:40]}")
                 warned = True
                 break
-        if warned or stripped.lower().startswith(("graph", "flowchart")):
+        if warned:
             continue
         # 3) ส่วนที่เหลือนอกโหนด: ข้อความบนเส้นแบบ -- ข้อความ --> รหัสโหนด และคำสั่ง
         outside = masked
@@ -402,9 +420,14 @@ def check_mermaid_labels(d, start, code):
             warn(d.rel, start + 1 + k, f"รหัสโหนดหรือชื่อ subgraph ในผัง flowchart เป็นภาษาไทย ซึ่ง Mermaid 11 ปฏิเสธเมื่ออยู่ต้นคำสั่งและไม่รับประกันตำแหน่งอื่น ให้ใช้รหัสละตินแล้วใส่ชื่อไทยในข้อความ เช่น A[เริ่ม] หรือ subgraph S1[ชื่อ]: {stripped[:40]}")
             continue
         rest = LEADING_COMMAND.sub("", outside, count=1)
-        m = RESERVED.search(rest)
-        if m:
+        for m in RESERVED.finditer(rest):
+            nxt = rest[m.end():m.end() + 1]
+            if m.group(1) in RESERVED_DASH_OK and nxt in ("-", "[", "(", "{"):
+                continue  # call-center, href[x] ใช้ได้
             warn(d.rel, start + 1 + k, f"ใช้คำสงวน {m.group(1)} เป็นรหัสโหนดไม่ได้ ให้เปลี่ยนรหัส เช่น {m.group(1).capitalize()} หรือ {m.group(1).upper()}: {stripped[:40]}")
+            break
+    if depth > 0:
+        warn(d.rel, start, f"subgraph เปิดแล้วไม่ปิดด้วย end จำนวน {depth} แห่ง")
     if in_quote >= 0:
         warn(d.rel, start + 1 + in_quote, "เครื่องหมายคำพูดในผัง Mermaid เปิดแล้วไม่ปิด ถ้าตั้งใจใช้สัญลักษณ์นิ้ว ให้ครอบข้อความทั้งหมดและเขียนเป็น #quot;")
 
